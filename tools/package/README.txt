@@ -52,8 +52,9 @@ Video pacing (window menu, saved for all VMs): how guest video streams are timed
   Off (default)            every frame is drawn as soon as it arrives: the lowest latency
                            and the least work.
   Smooth bursts            frames keep their spacing, at most 50 ms of added delay.
-  Follow guest clock       frames wait for the guest's timestamps, as spice-gtk does;
-                           video may then run about 0.4 s late and behind its sound.
+  Follow guest clock       frames and sound wait for the guest's timestamps, so they stay
+                           in sync; both then run about 0.4 s late, including sound with
+                           no video. Switching to or from it may cut or pause the sound once.
 
 Fast JPEG decoding (window menu, saved for all VMs, off by default): decodes JPEG images
   and video about 12% faster at slightly lower quality: colours are a little less accurate,

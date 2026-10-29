@@ -1,7 +1,7 @@
 # 0025. Video pacing is a setting; by default frames are drawn on arrival
 
 - Status: Accepted (the human, 2026-10-30: default `off`, for the best performance and the lowest latency; the
-  user can switch to a mode that follows the guest clock)
+  user can switch to a mode that follows the guest clock). Audio in `clock` mode: amended by 0030.
 - Date: 2026-10-30
 - Decided by: agent, from Codex's review finding that MJPEG frames were drawn on arrival; the three modes as a
   setting by the human (2026-10-30)
@@ -29,8 +29,8 @@
   - **`clock`**: spice-gtk's pacing. Each frame waits until the guest clock reaches its timestamp (at most 2 s, against
     a clock far off the stamps); a frame already behind the clock on arrival is dropped before decode (0 ms
     tolerance, as spice-gtk drops a late MJPEG frame). A new clock base from MAIN_MULTI_MEDIA_TIME reschedules the
-    queued frames. Until our audio honours PLAYBACK_LATENCY this puts video behind its sound by the server's clock lead
-    (the unverified ~400 ms above), and adds that delay to everything streamed.
+    queued frames. This adds the server's clock lead (the unverified ~400 ms above) to everything streamed; audio is
+    held to the same clock in this mode (0030), so sound and video stay together, both that late.
   - **Switching** reschedules queued frames at once under the new mode, keeping deadlines non-decreasing: `off` makes
     them all due (the newest is drawn, older ones are dropped as superseded), `clock` moves them to their timestamps,
     `spacing` caps them at 50 ms from now. If nothing remains queued the wake is cancelled.
@@ -67,6 +67,6 @@
     stay deterministic, and sessions without MAIN_INIT draw on arrival as before.
 - **Reason:** `off` has the lowest latency and does the least work per frame, which the principles rank first; a
   burst may overwrite a frame before it is presented, wasting its decode. `spacing`
-  removes that bunching for at most 50 ms of delay. `clock` is there for A/V sync: once audio honours
-  PLAYBACK_LATENCY it should give lip sync; until then it trades bunched frames for a fixed lag behind the sound. Costs: jitter longer than 50 ms is only partly smoothed; frames are not synchronized with audio
-  beyond both being shown on arrival; the stream report still sends 0 for last_frame_delay and audio_delay.
+  removes that bunching for at most 50 ms of delay. `clock` is there for A/V sync: with audio held to the guest clock
+  (0030) it should give lip sync, for a fixed lag of both. Costs: jitter longer than 50 ms is only partly smoothed; in
+  `off` and `spacing`, frames are not synchronized with audio beyond both being shown on arrival; the stream report still sends 0 for last_frame_delay and audio_delay.

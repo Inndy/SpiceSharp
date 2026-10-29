@@ -27,8 +27,8 @@ sealed partial class MainWindow
             audio.Start(channels, rate);
             if (Volatile.Read(ref ended)) audio.Stop();
         };
-        s.AudioData += pcm => audio.Write(pcm.Span);
-        s.AudioStopped += audio.Stop;
+        s.AudioData += (pcm, delayMs, gapMs) => audio.Write(pcm.Span, delayMs, gapMs);
+        s.AudioStopped += audio.EndOfStream; // clock pacing: held audio plays out first (docs/decisions/0030)
         s.AudioVolume += OnAudioVolume;
         s.AudioMute += audio.SetMute;
         s.Disconnected += _ => { Volatile.Write(ref ended, true); audio.Stop(); };

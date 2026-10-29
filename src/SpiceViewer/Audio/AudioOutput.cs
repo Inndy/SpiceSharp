@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Spice.Media;
 using Spice.Wire;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -12,8 +13,10 @@ namespace SpiceViewer;
 /// <para>
 /// <see cref="Start"/> spawns a render thread that owns every COM object (MTA) and
 /// <see cref="Stop"/> ends it, so nothing wakes the CPU between playbacks. The network
-/// thread feeds a ~200 ms ring buffer through <see cref="Write"/>; the render thread
-/// drains it on each WASAPI buffer event, writing silence on underflow.
+/// thread feeds a <see cref="PcmQueue"/> (~200 ms; longer while clock pacing holds audio
+/// back, docs/decisions/0030) through <see cref="Write"/>; the render thread drains it on
+/// each WASAPI buffer event, writing silence on underflow, and tells the queue how much
+/// the device still holds.
 /// </para>
 /// All public members are thread-safe.
 /// </summary>
@@ -26,10 +29,6 @@ sealed unsafe class AudioOutput : IDisposable
     const uint AUDCLNT_BUFFERFLAGS_SILENT = 2;
 
     const long DeviceBufferHns = 400_000; // 40 ms endpoint buffer (100 ns units)
-    const int RingMs = 200;               // ring capacity; oldest samples dropped beyond this
-    const int PrimeMs = 20;               // after an underrun, wait for this much before resuming
-    const int TrimAboveMs = 100;          // queued latency above this is trimmed ...
-    const int TrimToMs = 40;              // ... down to this
     const int EventTimeoutMs = 2000;
     const int MaxReopens = 3;
 
@@ -43,12 +42,8 @@ sealed unsafe class AudioOutput : IDisposable
     Thread? thread;
     bool disposed;
 
-    // Ring state, guarded by ringLock. Lengths and offsets are always whole frames.
-    readonly Lock ringLock = new();
-    short[] ring = [];
-    int head, count, channels, sampleRate, primeSamples, trimAbove, trimTo;
-    bool active, primed;
-    long droppedSamples, underruns;
+    readonly PcmQueue queue = new();
+    int channels, sampleRate; // set by Start while no render thread runs
 
     volatile int gainQ16 = 65536;
     volatile bool muted;
@@ -64,21 +59,13 @@ sealed unsafe class AudioOutput : IDisposable
         lock (lifecycle)
         {
             if (disposed) return;
+            // A stream that ended is still playing out its held audio: continue it on the open device if the format
+            // matches; otherwise (or once it finished) restart (docs/decisions/0030).
+            if (thread is not null && queue.TryContinue(channels, sampleRate)) return;
             StopCore();
-            lock (ringLock)
-            {
-                int length = sampleRate * RingMs / 1000 * channels;
-                if (ring.Length != length) ring = new short[length];
-                this.channels = channels;
-                this.sampleRate = sampleRate;
-                primeSamples = sampleRate * PrimeMs / 1000 * channels;
-                trimAbove = sampleRate * TrimAboveMs / 1000 * channels;
-                trimTo = sampleRate * TrimToMs / 1000 * channels;
-                head = count = 0;
-                droppedSamples = underruns = 0;
-                primed = false;
-                active = true;
-            }
+            this.channels = channels;
+            this.sampleRate = sampleRate;
+            queue.Reset(channels, sampleRate);
             stopEvent.Reset();
             deviceChanged.Reset();
             bufferEvent.Reset();
@@ -87,41 +74,31 @@ sealed unsafe class AudioOutput : IDisposable
         }
     }
 
-    /// <summary>Queues interleaved PCM. Never blocks beyond a short copy; drops the oldest samples on overflow.</summary>
-    public void Write(ReadOnlySpan<short> interleavedPcm)
-    {
-        lock (ringLock)
-        {
-            if (!active || interleavedPcm.IsEmpty) return;
-            short[] r = ring;
-            int n = interleavedPcm.Length - interleavedPcm.Length % channels;
-            if (n > r.Length)
-            {
-                droppedSamples += n - r.Length;
-                interleavedPcm = interleavedPcm.Slice(n - r.Length, r.Length);
-                n = r.Length;
-            }
-            else interleavedPcm = interleavedPcm[..n];
-
-            int overflow = count + n - r.Length;
-            if (overflow > 0)
-            {
-                head = Wrap(head + overflow);
-                count -= overflow;
-                droppedSamples += overflow;
-            }
-            int tail = Wrap(head + count);
-            int first = Math.Min(n, r.Length - tail);
-            interleavedPcm[..first].CopyTo(r.AsSpan(tail));
-            interleavedPcm[first..].CopyTo(r);
-            count += n;
-        }
-    }
+    /// <summary>
+    /// Queues interleaved PCM to be heard <paramref name="delayMs"/> from now, or as soon as possible
+    /// (<see cref="PcmQueue.Unsynced"/>). Never blocks beyond a short copy; see <see cref="PcmQueue.Write"/>.
+    /// </summary>
+    public void Write(ReadOnlySpan<short> interleavedPcm, int delayMs = PcmQueue.Unsynced, int gapMs = 0)
+        => queue.Write(interleavedPcm, delayMs, gapMs); // corrections are counted, and logged when the stream closes
 
     /// <summary>Closes the stream and ends the render thread.</summary>
     public void Stop()
     {
         lock (lifecycle) { if (!disposed) StopCore(); }
+    }
+
+    /// <summary>
+    /// The stream ended (PLAYBACK_STOP). Under clock pacing the audio still held back plays out to its deadline and the
+    /// render thread then closes the device on its own, from its buffer events (no timer); otherwise it closes now, as
+    /// <see cref="Stop"/> does. A <see cref="Start"/> meanwhile continues on the open device.
+    /// </summary>
+    public void EndOfStream()
+    {
+        lock (lifecycle)
+        {
+            if (disposed || thread is null) return;
+            if (!queue.BeginDrain()) StopCore();
+        }
     }
 
     /// <summary>Linear gain 0..1 applied to the samples (does not touch the Windows mixer).</summary>
@@ -148,14 +125,12 @@ sealed unsafe class AudioOutput : IDisposable
 
     void StopCore()
     {
-        lock (ringLock) active = false;
+        queue.Close();
         if (thread is null) return;
         stopEvent.Set();
         thread.Join();
         thread = null;
     }
-
-    int Wrap(int index) => index >= ring.Length ? index - ring.Length : index;
 
     // ---- render thread -------------------------------------------------------------------
 
@@ -165,6 +140,7 @@ sealed unsafe class AudioOutput : IDisposable
         HRESULT com = PInvoke.CoInitializeEx(COINIT.COINIT_MULTITHREADED);
         if (com.Value < 0 && com.Value != RPC_E_CHANGED_MODE)
         {
+            Retire();
             Log.Error($"Audio: CoInitializeEx failed (0x{com.Value:X8})");
             Finish();
             return;
@@ -197,17 +173,19 @@ sealed unsafe class AudioOutput : IDisposable
                 if (Environment.TickCount64 - opened > 5000) reopens = 0;
                 if (!recoverable || ++reopens > MaxReopens)
                 {
+                    Retire();
                     Log.Warn("Audio: output closed; the next playback start reopens the default device");
                     break;
                 }
                 Log.Info(exit == Exit.DefaultChanged
                     ? "Audio: default output device changed; reopening"
                     : "Audio: output device lost; reopening on the default device");
-                lock (ringLock) primed = false;
+                queue.Unprime();
             }
         }
         catch (Exception e)
         {
+            Retire();
             Log.Warn($"Audio: cannot open output: {e.Message} (0x{e.HResult:X8})");
         }
         finally
@@ -220,17 +198,25 @@ sealed unsafe class AudioOutput : IDisposable
         }
     }
 
+    /// <summary>
+    /// The worker has decided to exit (any path): it gives the queue up first, under the queue's lock, so from then on a
+    /// same-format <see cref="Start"/> fails <see cref="PcmQueue.TryContinue"/> and restarts (joining this worker)
+    /// instead of continuing onto it (review E4). The other exits already closed it: <see cref="StopCore"/> before
+    /// signalling stop, <see cref="PcmQueue.TryFinishDrain"/> at the end of a drain. A START that continued just before
+    /// the device failed loses that stream, as any stream does when its device fails.
+    /// </summary>
+    void Retire() => queue.Close();
+
     void Finish()
     {
-        long dropped, under;
-        lock (ringLock)
-        {
-            active = false;
-            head = count = 0;
-            dropped = droppedSamples;
-            under = underruns;
-        }
-        if (Log.IsEnabled(LogLevel.Debug)) Log.Debug($"Audio: stream closed; underruns {under}, dropped samples {dropped}");
+        Retire();
+        if (!Log.IsEnabled(LogLevel.Debug)) return;
+        var s = queue.Statistics;
+        string sync = s.SyncCorrections == 0 && s.GapSilenceFrames == 0 && s.GapTrimmedFrames == 0 ? ""
+            : $"; clock pacing made {s.SyncCorrections} corrections ({s.SyncSilenceFrames} frames of silence inserted, "
+              + $"{s.SyncDroppedFrames} dropped), stamp gaps {s.GapSilenceFrames} frames of silence, {s.GapTrimmedFrames} cut";
+        Log.Debug($"Audio: stream closed; underruns {s.Underruns}, dropped samples {s.DroppedSamples}, "
+            + $"discarded on close {s.DiscardedSamples}{sync}");
     }
 
     /// <summary>Opens a stream on the current default device and pumps it until stop, device change or failure.</summary>
@@ -267,9 +253,16 @@ sealed unsafe class AudioOutput : IDisposable
             client->GetService(&iid, (void**)&render);
             uint bufferFrames;
             client->GetBufferSize(&bufferFrames);
-            Log.Info($"Audio: playing {ch} ch {rate} Hz s16, device buffer {bufferFrames * 1000 / (uint)rate} ms");
+            // Audio the device holds past its buffer; clock pacing counts it as already scheduled (docs/decisions/0030).
+            long latencyHns = 0;
+            try { client->GetStreamLatency(&latencyHns); } catch { latencyHns = 0; }
+            int latencyFrames = (int)Math.Clamp(latencyHns * rate / 10_000_000, 0, rate);
+            Log.Info($"Audio: playing {ch} ch {rate} Hz s16, device buffer {bufferFrames * 1000 / (uint)rate} ms, "
+                + $"stream latency {latencyHns / 10_000} ms");
 
-            Fill(client, render, bufferFrames, ch); // pre-roll: queued audio, or ~10 ms of silence
+            // Pre-roll: queued audio, or ~10 ms of silence. A drain can end here (the replaced device already played the
+            // rest): then no client starts (review E3).
+            if (Fill(client, render, bufferFrames, ch, latencyFrames)) return Exit.Stop;
             client->Start();
             started = true;
 
@@ -284,7 +277,7 @@ sealed unsafe class AudioOutput : IDisposable
                     error = ErrorNoEvents;
                     return Exit.Failed;
                 }
-                Fill(client, render, bufferFrames, ch);
+                if (Fill(client, render, bufferFrames, ch, latencyFrames)) return Exit.Stop; // drained after the stream ended
             }
         }
         catch (Exception e)
@@ -307,26 +300,31 @@ sealed unsafe class AudioOutput : IDisposable
     /// <summary>
     /// Tops up the endpoint buffer with whatever the ring holds. The endpoint buffer itself absorbs
     /// network jitter: silence is written only when it is about to run dry (below ~10 ms queued).
+    /// Afterwards the queue learns how much the device holds (padding plus stream latency).
     /// </summary>
-    void Fill(IAudioClient* client, IAudioRenderClient* render, uint bufferFrames, int ch)
+    bool Fill(IAudioClient* client, IAudioRenderClient* render, uint bufferFrames, int ch, int latencyFrames)
     {
         uint padding;
         client->GetCurrentPadding(&padding);
-        if (padding >= bufferFrames) return;
+        // After PLAYBACK_STOP under clock pacing: no silence is padded, and once the queue and the device are empty
+        // the stream is done (returns true).
+        bool draining = queue.Draining;
+        if (draining && queue.TryFinishDrain((int)padding)) return true;
+        if (padding >= bufferFrames) { queue.DeviceQueuedFrames = (int)padding + latencyFrames; return false; }
         uint free = bufferFrames - padding;
         uint lowWater = bufferFrames / 4;
-        uint real = Math.Min(free, (uint)ReadyFrames());
+        uint real = Math.Min(free, (uint)queue.ReadyFrames());
         uint frames = real;
-        bool starving = padding + real < lowWater;
+        bool starving = !draining && padding + real < lowWater;
         if (starving) frames = Math.Min(free, lowWater - padding);
-        if (frames == 0) return;
+        if (frames == 0) { queue.DeviceQueuedFrames = (int)padding + latencyFrames; return false; }
 
         byte* data;
         render->GetBuffer(frames, &data);
         var dst = new Span<short>(data, (int)frames * ch);
-        int n = (int)real * ch;
-        if (n > 0) Dequeue(dst[..n], starving);
-        else if (starving) Dequeue([], true);
+        // One locked step takes the audio out of the queue and counts it, with any silence pad, as in the device. It
+        // takes less than chosen (or nothing) if the queue changed meanwhile; the rest is silence.
+        int n = queue.Transfer(dst[..((int)real * ch)], starving, (int)(padding + frames) + latencyFrames);
         uint flags = 0;
         if (n == 0 || muted) flags = AUDCLNT_BUFFERFLAGS_SILENT;
         else
@@ -336,46 +334,7 @@ sealed unsafe class AudioOutput : IDisposable
             if (gain < 65536) Scale(dst[..n], gain);
         }
         render->ReleaseBuffer(frames, flags);
-    }
-
-    /// <summary>Frames ready to play; 0 while (re)priming after an underrun. Trims excess latency.</summary>
-    int ReadyFrames()
-    {
-        lock (ringLock)
-        {
-            if (!primed)
-            {
-                if (count < primeSamples) return 0;
-                primed = true;
-            }
-            if (count > trimAbove)
-            {
-                // The queue grew (network burst after a stall); cut back so latency stays low.
-                int drop = count - trimTo;
-                head = Wrap(head + drop);
-                count -= drop;
-                droppedSamples += drop;
-            }
-            return count / channels;
-        }
-    }
-
-    /// <summary>
-    /// Removes dst.Length samples (never more than <see cref="ReadyFrames"/> reported; Write only
-    /// grows the queue). On starvation, re-primes so playback resumes with a small cushion.
-    /// </summary>
-    void Dequeue(Span<short> dst, bool starving)
-    {
-        lock (ringLock)
-        {
-            int n = dst.Length;
-            int first = Math.Min(n, ring.Length - head);
-            ring.AsSpan(head, first).CopyTo(dst);
-            ring.AsSpan(0, n - first).CopyTo(dst[first..]);
-            head = Wrap(head + n);
-            count -= n;
-            if (starving && primed) { primed = false; underruns++; }
-        }
+        return false;
     }
 
     static void Scale(Span<short> samples, int gainQ16)

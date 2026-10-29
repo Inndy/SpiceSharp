@@ -38,3 +38,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0027](0027-native-dlls-trimmed-with-gc-sections-and-full-lto-lz4-decoder-in-spicecodec.md) | Native DLLs trimmed with gc-sections and full LTO; LZ4 decoder in spicecodec.dll (human, 2026-10-30) |
 | [0028](0028-fast-jpeg-and-preferred-image-compression-are-settings-lz4-is-advertised.md) | Fast JPEG decoding and the preferred image compression are settings; LZ4 is advertised (human, 2026-10-30) |
 | [0029](0029-vendored-codec-patches-allowed-with-differential-verification.md) | Vendored codec patches are allowed when a differential test proves them (human, 2026-10-30) |
+| [0030](0030-clock-pacing-holds-audio-to-the-guest-clock.md) | Clock pacing holds audio to the guest clock by packet timestamps (human asked for A/V sync, 2026-10-30) |

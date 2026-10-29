@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-30-clock-av-sync.md](2026-10-30-clock-av-sync.md) | Clock-mode audio sync: coherent clock rebases, queued-audio retiming, device handoff, and window-free regressions |
 | [2026-10-30-pre-release-commits.md](2026-10-30-pre-release-commits.md) | The pre-release commits, later squashed into the initial commit; native LZ ABI/allocation, occlusion, pacing memory/reporting, and uncommitted-fix rechecks |
 | [2026-10-30-native-codecs.md](2026-10-30-native-codecs.md) | Native codec correctness, retained memory, allocation failure, C ABI bounds, and hot-path allocations |
 | [codex-core.md](codex-core.md) | Transport, wire, session, canvas |

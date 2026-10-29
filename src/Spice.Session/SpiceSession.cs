@@ -284,22 +284,32 @@ public sealed partial class SpiceSession : IAsyncDisposable
 
     // ---------------- multimedia clock ----------------
 
-    long _mmBaseTicks;
-    uint _mmBase;
-    bool _mmSeeded;
+    /// <summary>A guest clock base: guest time <see cref="Mm"/> at local time <see cref="Ticks"/>.</summary>
+    sealed record MmClockBase(uint Mm, long Ticks);
+
+    /// <summary>
+    /// The last base, published whole so a reader on another channel thread (stream pacing, playback) never combines the
+    /// guest time of one base with the local time of another (review A1, docs/decisions/0030). Null until MAIN_INIT. A
+    /// new base allocates once per MAIN_INIT or MULTI_MEDIA_TIME, a control message.
+    /// </summary>
+    MmClockBase? _mmClock;
+
+    bool MmSeeded => Volatile.Read(ref _mmClock) is not null;
 
     internal void MultimediaTimeBase(uint mm)
     {
-        _mmBase = mm;
-        _mmBaseTicks = _pacing.NowMs;
-        Volatile.Write(ref _mmSeeded, true);
+        Volatile.Write(ref _mmClock, new MmClockBase(mm, _pacing.NowMs));
         OnGuestClockRebased();
     }
 
     /// <summary>The guest's multimedia clock (ms), extrapolated from the last MULTI_MEDIA_TIME.</summary>
     public uint MultimediaTime => MultimediaTimeAt(_pacing.NowMs);
 
-    uint MultimediaTimeAt(long nowMs) => unchecked(_mmBase + (uint)(nowMs - _mmBaseTicks));
+    uint MultimediaTimeAt(long nowMs)
+    {
+        var b = Volatile.Read(ref _mmClock);
+        return b is null ? unchecked((uint)nowMs) : unchecked(b.Mm + (uint)(nowMs - b.Ticks));
+    }
 
     public async ValueTask DisposeAsync()
     {

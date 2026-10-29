@@ -297,7 +297,7 @@ public sealed partial class SpiceSession
         var mode = _videoPacing;
         // Without the guest clock (MAIN_INIT seeds it) nothing is late or early, as in SpiceSee. After the session
         // has stopped, a handler already running draws as before and nothing is queued.
-        if (mode == VideoPacing.Off || !Volatile.Read(ref _mmSeeded) || _pacingStopped) { DecodeStreamFrame(s, data, s.Dest, s.Window); return; }
+        if (mode == VideoPacing.Off || !MmSeeded || _pacingStopped) { DecodeStreamFrame(s, data, s.Dest, s.Window); return; }
         long now = _pacing.NowMs;
         int margin = unchecked((int)(stamp - MultimediaTimeAt(now))); // > 0: ahead of the guest clock
         if (mode == VideoPacing.Clock ? margin < 0 : margin < -LateMs) { s.Drops++; return; }
@@ -326,7 +326,7 @@ public sealed partial class SpiceSession
     /// </summary>
     void RescheduleQueued(long now)
     {
-        bool seeded = Volatile.Read(ref _mmSeeded);
+        bool seeded = MmSeeded;
         foreach (var s in _streams.Values)
         {
             long floor = now;
