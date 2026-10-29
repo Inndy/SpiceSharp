@@ -20,7 +20,10 @@ fi
 b="build/win-$1"; out="out/win-$1"
 command -v "$triple-clang" >/dev/null
 bash fetch.sh
-common=(-G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE="$release")
+# Nothing is installed, but an explicit prefix keeps the Windows-style defaults (c:/libjpeg-turbo-gcc64) out of
+# configure, which a Linux CMake rejects as relative paths.
+common=(-G Ninja -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS_RELEASE="$release"
+        -DCMAKE_INSTALL_PREFIX="$root/$b/install")
 # libjpeg-turbo and opus are built as static libraries; native/CMakeLists.txt links them into turbojpeg.dll and
 # opus.dll with the exports listed in turbojpeg.def and opus.def.
 cmake -S downloads/libjpeg-turbo-3.1.2 -B "$b/jpeg" "${common[@]}" -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_TURBOJPEG=ON -DWITH_TOOLS=OFF -DWITH_TESTS=OFF "${jpeg_simd[@]}"

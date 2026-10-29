@@ -29,6 +29,9 @@
     - These flags are in `CMAKE_C_FLAGS_RELEASE` only, so CMake's configure checks run without them.
     - The toolchain files set `CMAKE_AR`/`CMAKE_RANLIB` to `llvm-ar`/`llvm-ranlib`, which index bitcode archives.
       Both MSYS2 clang64 and llvm-mingw ship them.
+  - Debug info: every image links with `-Wl,--strip-debug,--build-id` (added 2026-10-30 with the Linux cross
+    build). llvm-mingw's CRT startup objects carry DWARF, which added 35–45 KB to each image; stripping it also
+    drops lld's default build ID, so `--build-id` keeps it. MSYS2 output is unchanged apart from timestamps.
   - Settings kept unchanged: `-O2`, `-mguard=cf`, x86-64-v3, `REQUIRE_SIMD` and `OPUS_X86_PRESUME_*`
     ([0026](0026-x64-builds-target-x86-64-v3.md)).
   - LZ4 source: `native/fetch.sh` pins the lz4 v1.10.0 release tarball by SHA-256. Only `lib/lz4.c`

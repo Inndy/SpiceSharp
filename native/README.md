@@ -10,17 +10,11 @@ python native/verify.py x64
 Dependencies: CMake 3.24+, Ninja, Clang targeting MinGW, LLD, llvm-ar, curl, tar,
 sha256sum, and NASM for x64 JPEG SIMD. MSYS2 packages include
 `mingw-w64-clang-x86_64-{clang,cmake,ninja,nasm}`. This machine's root is
-`~/scoop/apps/msys2/current`. Do not use clang-cl or MSVC.
-
-On Linux put an llvm-mingw distribution's `bin` on PATH, install the host
-tools above, and run the same commands (`python3` instead of `python` if needed).
-`bash native/build.sh arm64` uses `aarch64-w64-mingw32-clang`; ARM64 JPEG SIMD
-uses NEON rather than NASM. Both architectures use UCRT. ARM64 and Linux cross
-builds were not run here: the installed MSYS2 toolchain only targets x64.
-Run the ARM64 smoke executable on Windows ARM64 after cross compilation.
+`~/scoop/apps/msys2/current`. Do not use clang-cl or MSVC. The MSYS2 clang64
+toolchain only targets x64; ARM64 DLLs are cross-built on Linux (below).
 
 Outputs: `native/out/win-x64/{spicecodec,turbojpeg,opus}.dll`, or `win-arm64`.
-`codec-smoke.exe` sits alongside them and runs automatically for x64 on Windows.
+`codec-smoke.exe` sits alongside them and runs automatically for x64 under MSYS2.
 Generated sources, build trees, DLLs and logs are ignored by native/.gitignore.
 `fetch.sh` pins libjpeg-turbo tag 3.1.2, Opus tag v1.5.2 and lz4 tag v1.10.0 by
 release tarball SHA-256; checksum verification occurs even for cached downloads.
@@ -30,6 +24,33 @@ Only `lib/lz4.c` of lz4 is compiled, statically into spicecodec.dll.
 Build order: `build.sh` builds libjpeg-turbo (`turbojpeg-static`) and opus as
 static libraries, then `CMakeLists.txt` links spicecodec.dll, turbojpeg.dll
 (from `turbojpeg.def`) and opus.dll (from `opus.def`) and the smoke test.
+
+## Cross-building on Linux
+
+Both architectures cross-compile on a Linux host with llvm-mingw (checked
+2026-10-30 with release 20261020: LLVM 23.1.4, UCRT, unpacked to
+`~/opt/llvm-mingw`; no root needed). The host needs CMake, Ninja, NASM, curl,
+tar, sha256sum and python3. From the repository root:
+
+```sh
+export PATH=~/opt/llvm-mingw/bin:$PATH
+bash native/build.sh x64 && python3 native/verify.py x64
+bash native/build.sh arm64 && python3 native/verify.py arm64
+```
+
+Each build takes about 15 s on 8 cores, and verify.py passes for both.
+`build.sh arm64` uses `aarch64-w64-mingw32-clang` and libjpeg-turbo's NEON
+intrinsics instead of NASM. The executables don't run on Linux: copy
+`out/win-<arch>` to Windows to run `codec-smoke.exe`.
+
+The x64 DLLs match the MSYS2 clang64 (LLVM 22) build in exports, imported DLLs,
+DLL characteristics and CFG function counts, and are up to 2 % larger. On
+Windows, the Linux-built x64 smoke test passed, and so did the difference test
+with the Linux-built spicecodec.dll as the DLL under test. To repeat that, run
+`bash native/difftest/run.sh` once, then from `native/build/difftest/release`:
+`./difftest.exe ref/spicecodec.dll <linux-out>/spicecodec.dll --fixtures
+../../../../tests/fixtures`. The ARM64 DLLs have not run yet: run the ARM64
+smoke executable on Windows ARM64.
 
 ## ABI and binding decisions
 
@@ -87,7 +108,9 @@ for each request. All exported C functions use the Windows C calling convention.
 
 All C compilation uses `-O2 -mguard=cf -ffunction-sections -fdata-sections
 -flto` (full LTO; x64 adds `-march=x86-64-v3`), LLD, `-static-libgcc`, and
-`--dynamicbase --high-entropy-va --nxcompat --guard-cf`. The DLLs link with
+`--dynamicbase --high-entropy-va --nxcompat --guard-cf`, plus `--strip-debug
+--build-id` (llvm-mingw's CRT objects carry DWARF that would add about 35 KB to
+each image; MSYS2's don't, so its output is unchanged). The DLLs link with
 `--exclude-all-symbols --gc-sections`; lld's MinGW default is `-opt:noref`, so
 without `--gc-sections` nothing is removed. Static archives hold LTO bitcode,
 so the toolchain files use `llvm-ar` and `llvm-ranlib`. The LTO flags are in
