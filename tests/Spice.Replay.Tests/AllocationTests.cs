@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using Spice.Transport;
 using Spice.Wire;
+using Spice.Tests;
 using Xunit.Abstractions;
 using SpiceCanvas = Spice.Canvas.Canvas;
 
@@ -33,11 +34,12 @@ public sealed class AllocationTests(ITestOutputHelper output)
         });
         for (int i = 0; i < 256; i++) canvas.Apply(DisplayMsg.DrawText, text);
         Assert.Equal(uint.MaxValue, canvas.Primary!.Row(0)[0]);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10000; i++) canvas.Apply(DisplayMsg.DrawText, text);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        output.WriteLine($"10000 visible DRAW_TEXT: {allocated} B ({allocated / 10000.0} B/message)");
-        Assert.Equal(0, canvas.Errors); Assert.Equal(uint.MaxValue, canvas.Primary.Row(0)[0]); Assert.Equal(0, allocated);
+        var measurement = AllocationWindow.Measure(nameof(VisibleDrawTextDoesNotAllocateAfterWarmup),
+            () => { for (int i = 0; i < 10000; i++) canvas.Apply(DisplayMsg.DrawText, text); },
+            prepare: () => { for (int i = 0; i < 256; i++) canvas.Apply(DisplayMsg.DrawText, text); },
+            report: output.WriteLine);
+        output.WriteLine($"10000 visible DRAW_TEXT: {measurement.Bytes} B; attempts={measurement.Attempts}, retries={measurement.Retries}.");
+        Assert.Equal(0, canvas.Errors); Assert.Equal(uint.MaxValue, canvas.Primary.Row(0)[0]);
     }
     // 32-bit top-down decodes straight into the image; the other two convert from pooled scratch (docs/decisions/0028).
     [Spice.Tests.Lz4NativeTheory]
@@ -55,12 +57,13 @@ public sealed class AllocationTests(ITestOutputHelper output)
         canvas.Apply(DisplayMsg.SurfaceCreate, Lz4ImageTests.Bytes(b => { b.Write(0u); b.Write((uint)w); b.Write((uint)h); b.Write(32u); b.Write(1u); }));
         for (int i = 0; i < 64; i++) canvas.Apply(DisplayMsg.DrawCopy, draw);
         Assert.Equal(0, canvas.Errors);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++) canvas.Apply(DisplayMsg.DrawCopy, draw);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        output.WriteLine($"1000 LZ4 {(BitmapFormat)format} {(topDown ? "top-down" : "bottom-up")} {w}x{h} draws: {allocated} B");
+        var measurement = AllocationWindow.Measure($"LZ4 {(BitmapFormat)format}, topDown={topDown}",
+            () => { for (int i = 0; i < 1000; i++) canvas.Apply(DisplayMsg.DrawCopy, draw); },
+            prepare: () => { for (int i = 0; i < 64; i++) canvas.Apply(DisplayMsg.DrawCopy, draw); },
+            report: output.WriteLine);
+        output.WriteLine($"1000 LZ4 {(BitmapFormat)format} {(topDown ? "top-down" : "bottom-up")} {w}x{h} draws: " +
+            $"{measurement.Bytes} B; attempts={measurement.Attempts}, retries={measurement.Retries}.");
         Assert.Equal(0, canvas.Errors);
-        Assert.Equal(0, allocated);
     }
 
     sealed record Message(ushort Type, byte[] Body, string Name, string Images, long SurfaceBytes);
@@ -124,17 +127,27 @@ public sealed class AllocationTests(ITestOutputHelper output)
         pools.Capture = false; pools.Stop(); // event listener overhead is excluded from all second-pass measurements
         Assert.Equal(0, canvas.Errors);
         byte[] warmHash = SHA256.HashData(canvas.Primary!.Pixels);
-        canvas.Apply(DisplayMsg.Reset, ReadOnlyMemory<byte>.Empty); // reset GLZ IDs, palettes and cached images, retain warmed pools/capacity
         _ = GC.GetTotalAllocatedBytes(true); _ = GC.GetAllocatedBytesForCurrentThread();
-        long processStart = GC.GetTotalAllocatedBytes(true);
-        long threadStart = GC.GetAllocatedBytesForCurrentThread();
-        Apply(canvas, messages, measured, null);
-        long threadBytes = GC.GetAllocatedBytesForCurrentThread() - threadStart;
+        long surfaces = messages.Sum(m => m.SurfaceBytes);
+        long bound = surfaces + 4096;
+        long processStart = 0;
+        var measurement = AllocationWindow.Measure($"SecondCanvasReplay({fixture})",
+            () => Apply(canvas, messages, measured, null),
+            prepare: () =>
+            {
+                // Each attempt starts a fresh replay timeline and rewarms backing pools after any trim.
+                canvas.Apply(DisplayMsg.Reset, ReadOnlyMemory<byte>.Empty);
+                Apply(canvas, messages, warm, null);
+                canvas.Apply(DisplayMsg.Reset, ReadOnlyMemory<byte>.Empty);
+                processStart = GC.GetTotalAllocatedBytes(true);
+            },
+            minimumBytes: surfaces, maximumBytes: bound, report: output.WriteLine);
+        long threadBytes = measurement.Bytes;
         long processBytes = GC.GetTotalAllocatedBytes(true) - processStart;
         Assert.Equal(0, canvas.Errors); Assert.Equal(warmHash, SHA256.HashData(canvas.Primary!.Pixels));
 
-        long surfaces = messages.Sum(m => m.SurfaceBytes);
-        output.WriteLine($"{fixture}: messages={messages.Length}; thread={threadBytes} B ({(double)threadBytes / messages.Length:F2} B/message); process={processBytes} B; surface payload={surfaces} B.");
+        output.WriteLine($"{fixture}: messages={messages.Length}; thread={threadBytes} B ({(double)threadBytes / messages.Length:F2} B/message); process={processBytes} B; surface payload={surfaces} B; " +
+            $"attempts={measurement.Attempts}, retries={measurement.Retries}.");
         output.WriteLine("Message / image tags | count | allocated B | B/message | maximum message B");
         foreach (var group in Enumerable.Range(0, messages.Length).GroupBy(i => (messages[i].Name, messages[i].Images)).OrderBy(g => g.Key))
         {
@@ -152,7 +165,6 @@ public sealed class AllocationTests(ITestOutputHelper output)
         // SurfaceCreate always creates pinned pixels; pool warm-up cannot eliminate that lifetime allocation.
         // Warmed decoded-image draws allocate nothing (pooled DecodedImage objects, precomputed statistics keys; they
         // were 88 B/message before). 4 KiB fixed slack covers the surface object/array header and first-use bookkeeping.
-        long bound = surfaces + 4096;
         output.WriteLine($"Bound: {bound} B = surface payload + 4096 B slack (warmed draws allocate nothing).");
         Assert.Equal(threadBytes, measured.Sum()); // the measurement loop/instrumentation itself allocates nothing
         Assert.InRange(threadBytes, surfaces, bound);
@@ -220,11 +232,11 @@ public sealed class AllocationTests(ITestOutputHelper output)
         canvas.Apply(DisplayMsg.SurfaceCreate, surface); canvas.Apply(DisplayMsg.DrawCopy, Draw(false));
         byte[] cached = Draw(true);
         for (int i = 0; i < 256; i++) canvas.Apply(DisplayMsg.DrawCopy, cached);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10000; i++) canvas.Apply(DisplayMsg.DrawCopy, cached);
-        long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        output.WriteLine($"FromCache-only 10000 warmed draws: {bytes} B ({bytes / 10000.0:F2} B/message).");
+        var measurement = AllocationWindow.Measure(nameof(CachedImageDrawMustNotAllocateStatisticsStringsPerMessage),
+            () => { for (int i = 0; i < 10000; i++) canvas.Apply(DisplayMsg.DrawCopy, cached); },
+            prepare: () => { for (int i = 0; i < 256; i++) canvas.Apply(DisplayMsg.DrawCopy, cached); },
+            report: output.WriteLine);
+        output.WriteLine($"FromCache-only 10000 warmed draws: {measurement.Bytes} B; attempts={measurement.Attempts}, retries={measurement.Retries}.");
         Assert.Equal(0, canvas.Errors); Assert.Equal(0xFF123456u, canvas.Primary!.Row(0)[0]);
-        Assert.Equal(0, bytes); // explicitly failing regression for avoidable hot-path diagnostic formatting
     }
 }

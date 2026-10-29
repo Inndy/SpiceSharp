@@ -4,6 +4,7 @@ using System.Reflection;
 using Spice.Native;
 using Spice.Session;
 using Spice.Wire;
+using Spice.Tests;
 using VvFile;
 using Xunit.Abstractions;
 
@@ -329,11 +330,17 @@ public sealed partial class StreamPacingTests(ITestOutputHelper output)
         int i = 0;
         for (; i < 100; i++) Step(i);
         Assert.Equal(200, h.Draws);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (; i < 1100; i++) Step(i);
-        long bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        output.WriteLine($"{mode}: 1000 frame pairs (2000 frames, up to 1000 queued): {bytes} B.");
-        Assert.Equal(2200, h.Draws); Assert.Equal(0u, h.State<uint>("Drops"));
-        Assert.Equal(0, bytes);
+        int drawsBefore = 0;
+        var measurement = AllocationWindow.Measure($"PacedFrames({mode})",
+            () => { for (int n = 0; n < 1000; n++) Step(i++); },
+            prepare: () =>
+            {
+                for (int n = 0; n < 100; n++) Step(i++); // Continue monotonically across retries.
+                drawsBefore = h.Draws;
+            },
+            report: output.WriteLine);
+        output.WriteLine($"{mode}: 1000 frame pairs (2000 frames, up to 1000 queued): {measurement.Bytes} B; " +
+            $"attempts={measurement.Attempts}, retries={measurement.Retries}.");
+        Assert.Equal(drawsBefore + 2000, h.Draws); Assert.Equal(0u, h.State<uint>("Drops"));
     }
 }

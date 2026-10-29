@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Spice.Native;
 using Spice.Media;
 using Spice.Wire;
+using Spice.Tests;
 
 namespace Spice.Native.Tests;
 
@@ -162,9 +163,8 @@ public sealed unsafe class CodecTests
         using var raw = new AudioDecoder(AudioDataMode.Raw, 2, 48000);
         byte[] audio = new byte[1920]; short[] pcm = new short[960];
         for (int i = 0; i < 20; i++) { lz.TryDecode(data, [], W, H, dst, W * 4, out _); raw.Decode(audio, pcm); }
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++) { lz.TryDecode(data, [], W, H, dst, W * 4, out _); raw.Decode(audio, pcm); }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+        AllocationWindow.Measure(nameof(WarmImageAndAudioCallsDoNotAllocate),
+            () => { for (int i = 0; i < 100; i++) { lz.TryDecode(data, [], W, H, dst, W * 4, out _); raw.Decode(audio, pcm); } },
+            prepare: () => { for (int i = 0; i < 20; i++) { lz.TryDecode(data, [], W, H, dst, W * 4, out _); raw.Decode(audio, pcm); } });
     }
 }

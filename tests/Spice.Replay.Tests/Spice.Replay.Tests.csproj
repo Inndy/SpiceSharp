@@ -15,6 +15,7 @@
     <ProjectReference Include="../../src/Spice.Session/Spice.Session.csproj" />
     <!-- The test LZ4 encoder and the attributes that skip native LZ4 tests on a spicecodec.dll without sc_lz4_decode. -->
     <Compile Include="../Spice.Native.Tests/Lz4TestEncoder.cs" Link="Shared/Lz4TestEncoder.cs" />
+    <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
   </ItemGroup>
   <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
 </Project>
