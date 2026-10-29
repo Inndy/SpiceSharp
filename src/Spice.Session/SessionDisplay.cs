@@ -32,6 +32,9 @@ public sealed partial class SpiceSession
         public uint UniqueId, MaxWindow, Frames, Drops, StartMm, LastMm, Window;
         // counts from earlier report windows, for the lifetime totals in the log
         public uint EarlierFrames, EarlierDrops;
+        // frames not decoded because the stream's clip hid all of them when they came due; for the log only, the
+        // report counts them as shown (as spice-gtk does: they say nothing about keeping up)
+        public uint Hidden;
         public bool Reporting;
         // pacing: frames waiting for their deadline, oldest first, in a fixed ring (deadlines never decrease along it)
         public readonly QueuedFrame[] Queue = new QueuedFrame[MaxQueuedFrames];
@@ -226,8 +229,16 @@ public sealed partial class SpiceSession
                 {
                     if (_streams.Remove(id, out var s))
                     {
-                        Log.Info($"display: stream {id} ended after {s.EarlierFrames + s.Frames} frames, {s.EarlierDrops + s.Drops} dropped");
-                        EndStream(s);
+                        // The server may draw over the stream area from the next message on, believing the last frame
+                        // is on screen: draw the newest queued frame now, before those draws, and drop the older ones
+                        // (counted). Drawn later on their schedule they would overwrite the server's newer drawing.
+                        try { if (s.QueueCount > 0) DrawNewestQueued(s); }
+                        finally
+                        {
+                            Log.Info($"display: stream {id} ended after {s.EarlierFrames + s.Frames} frames, " +
+                                $"{s.EarlierDrops + s.Drops} dropped, {s.Hidden} hidden by its clip");
+                            EndStream(s);
+                        }
                     }
                 }
                 break;
@@ -424,12 +435,25 @@ public sealed partial class SpiceSession
                     DropHead(s);
                     continue;
                 }
-                var f = Dequeue(s);
-                try { DecodeStreamFrame(s, f.Data.AsSpan(0, f.Length), f.Dest, f.Window); }
-                finally { ReturnFrameBuffer(f.Data); }
+                DrawHead(s);
             }
         }
         UpdateWake();
+    }
+
+    /// <summary>Under _streamLock: dequeues the oldest queued frame and draws it now.</summary>
+    void DrawHead(VideoStream s)
+    {
+        var f = Dequeue(s);
+        try { DecodeStreamFrame(s, f.Data.AsSpan(0, f.Length), f.Dest, f.Window); }
+        finally { ReturnFrameBuffer(f.Data); }
+    }
+
+    /// <summary>Under _streamLock: drops every queued frame but the newest (counted) and draws that one now.</summary>
+    void DrawNewestQueued(VideoStream s)
+    {
+        while (s.QueueCount > 1) DropHead(s);
+        DrawHead(s);
     }
 
     /// <summary>Under _streamLock: arms the wake for the earliest queued deadline, or cancels it when nothing is queued.</summary>
@@ -548,10 +572,15 @@ public sealed partial class SpiceSession
         return SpiceClip.Read(ref reader);
     }
 
-    /// <summary>Under _streamLock: decodes one frame and blits it at <paramref name="dest"/> with the stream's current clip.</summary>
+    /// <summary>
+    /// Under _streamLock: decodes one frame and blits it at <paramref name="dest"/> with the stream's current clip. A
+    /// frame the clip hides entirely (the server has drawn over the whole stream area since, e.g. the video's window
+    /// closed while frames waited for the guest clock) is counted as hidden and not decoded.
+    /// </summary>
     void DecodeStreamFrame(VideoStream s, ReadOnlySpan<byte> data, SpiceRect dest, uint window)
     {
         if (s.Codec != VideoCodecType.Mjpeg) { CountDrop(s, window); return; }
+        if (!Canvas.IsFrameVisible(s.SurfaceId, dest, s.Clip)) { s.Hidden++; return; }
         _mjpeg ??= new JpegDecoder();
         _mjpeg.Fast = _fastJpeg; // applied to the codec handle only when it changes
         if (!_mjpeg.TryReadHeader(data, out int w, out int h) || w <= 0 || h <= 0 || w > 8192 || h > 8192) { CountDrop(s, window); return; }

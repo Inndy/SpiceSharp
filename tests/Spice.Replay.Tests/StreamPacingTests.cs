@@ -157,8 +157,12 @@ public sealed partial class StreamPacingTests(ITestOutputHelper output)
         }
         Assert.Null(h.Clock.ArmedAt); Assert.Equal(0L, h.QueuedBytes);
         if (removal == "recreate") Assert.Equal(0, h.State<int>("QueueCount"));
+        // STREAM_DESTROY draws the newest queued frame at once, before the server's next draws (StreamEndTests);
+        // destroy-all and re-creating the id discard it.
+        int drawn = removal == "destroy" ? 2 : 1;
+        Assert.Equal(drawn, h.Draws);
         h.Clock.Advance(1000);
-        Assert.Equal(1, h.Draws);
+        Assert.Equal(drawn, h.Draws);
     }
 
     [Fact]
@@ -170,9 +174,10 @@ public sealed partial class StreamPacingTests(ITestOutputHelper output)
         h.Frame(Epoch); h.Frame(Epoch + 20);
         Assert.Equal(2, h.Draws); Assert.Equal(18, h.Clock.ArmedAt);
         h.Send(DisplayMsg.StreamDestroy, Bytes(w => w.Write(7u)));
+        Assert.Equal(3, h.Draws); // stream 7's queued frame is drawn as it ends
         Assert.Equal(28, h.Clock.ArmedAt);
         h.Clock.Advance(28);
-        Assert.Equal(3, h.Draws); Assert.Null(h.Clock.ArmedAt);
+        Assert.Equal(4, h.Draws); Assert.Null(h.Clock.ArmedAt);
     }
 
     [Fact]

@@ -15,6 +15,8 @@ public static class VdAgent
     public const int MaxQueuedOut = 40 << 20;
     public const uint MouseState = 1, MonitorsConfig = 2, Reply = 3, Clipboard = 4, DisplayConfig = 5, AnnounceCapabilities = 6,
         ClipboardGrab = 7, ClipboardRequest = 8, ClipboardRelease = 9;
+    /// <summary>VDAgentReply.error values: VD_AGENT_SUCCESS and VD_AGENT_ERROR.</summary>
+    public const uint ReplySuccess = 1, ReplyError = 2;
     public const int CapMouseState = 0, CapMonitorsConfig = 1, CapReply = 2, CapClipboard = 3, CapDisplayConfig = 4,
         CapClipboardByDemand = 5, CapClipboardSelection = 6, CapSparseMonitorsConfig = 7, CapGuestLineEndLf = 8,
         CapGuestLineEndCrlf = 9, CapMaxClipboard = 10, CapMonitorsConfigPosition = 12, CapClipboardNoReleaseOnRegrab = 16;
@@ -283,8 +285,13 @@ public sealed partial class SpiceSession
                 GuestClipboardRelease?.Invoke();
                 break;
             case VdAgent.Reply:
-                Log.Debug($"agent: reply type {r.U32()} error {r.U32()}");
+            {
+                // VDAgentReply: the message type replied to, then VD_AGENT_SUCCESS (1) or VD_AGENT_ERROR (2).
+                uint repliedTo = r.U32(), result = r.U32();
+                if (result == VdAgent.ReplySuccess) Log.Debug($"agent: message type {repliedTo} succeeded");
+                else Log.Info($"agent: message type {repliedTo} failed (result {result})");
                 break;
+            }
         }
     }
 

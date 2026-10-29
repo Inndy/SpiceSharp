@@ -66,13 +66,16 @@ and `imageCompression`; `--debug` was on for the log.
   so STREAM_DESTROY didn't discard them. The likely path is the documented one in 0025: a queued frame is drawn with
   the stream's current clip, and the server had clipped the stream area once the desktop was redrawn over it, so the
   blit covered nothing. Not confirmed at the message level. The picture was right, so this looks like intended
-  behaviour; it is noted because the "dropped" count in the log doesn't show it.
+  behaviour; it is noted because the "dropped" count in the log doesn't show it. (Follow-up: reproduced in a replay
+  test and fixed in decision 0025, "Hidden frames": such frames are no longer decoded and the log counts them; needs
+  a live re-check.)
 - **F3: stale doc comment.** `src/Spice.Session/VideoPacing.cs` still calls `Spacing` the "Default"; the default is
   `Off` (`SessionDisplay._videoPacing`, `ViewerSettings.VideoPacing`, decision 0025).
 - **F4: one audio underrun.** The first playback stream after connecting to win81 had 1 underrun; the eight streams
   after it and all four on win7 had none. Not reproduced, so not filed as a bug.
 - Not a bug, but easy to misread: the `--debug` line `agent: reply type 2 error 1` after each resize is a successful
-  monitors-config reply (`VD_AGENT_SUCCESS` = 1).
+  monitors-config reply (`VD_AGENT_SUCCESS` = 1). (Follow-up: now logged as `agent: message type 2 succeeded`, and a
+  failure at Info as `failed (result N)`.)
 
 ## Not covered
 
@@ -81,3 +84,29 @@ and `imageCompression`; `--debug` was on for the log.
 - Audio/video sync and `clock` mode with real video content (the animation has no sound).
 - `spacing` holding bursty frames: the LAN delivered frames evenly, so no frame was held or dropped as late.
 - Presentation-model details (flip and independent flip); see the 2026-10-29 record.
+
+## Re-check of F2 and F4 (stream tail)
+
+The stream-tail fix before it was squashed (main `1f4b8bc` plus the fix: decision 0025 "Hidden frames" and "STREAM_DESTROY with frames still
+queued", and the agent reply log), on `win7`. The viewer runs used the AOT zip from `pwsh tools/package.ps1` at that
+commit, with `videoPacing: clock` and `--debug`. Message order came from the probe (as above) built against a scratch
+copy of the same sources with one added Debug line that logs every display message except stream data (type, length;
+for STREAM_CLIP its clip type and rectangle count; the number of frames queued); that line is not in the commit. The
+picture after each run was checked by comparing the probe's final canvas with the first screen of a new connection
+(the server's own copy of the screen), and in the viewer from window screenshots.
+
+| What | Run | Observed | Result |
+|---|---|---|---|
+| Message order when the video window closes | probe, `clock`, 300-frame animation | with 8 frames queued: STREAM_CLIP for the stream with clip type 1 (rectangles) and **0 rectangles**, then the desktop draws (DRAW_COPY); about 950 ms later a second empty STREAM_CLIP and STREAM_DESTROY, with nothing queued | confirmed: clip first, destroy after ~1 s |
+| Stream-end log, close | probe and viewer, `clock` | `display: stream 40 ended after 300 frames, 0 dropped, 8 hidden by its clip` (probe); `... after 237 frames, 0 dropped, 8 hidden by its clip` (viewer) | pass |
+| Picture after the close | probe, `clock` | final canvas vs. a new connection's screen: 146 pixels differ, all in the taskbar clock (1225..1242, 775..787); the stream area is identical | pass |
+| | viewer, `clock` | screenshot after the close: plain desktop, no video left | pass |
+| Window moved mid-stream | probe, `clock` | old stream: empty STREAM_CLIP with 8 frames queued; new stream at the new position about 0.93 s later; then the old stream's second empty clip and STREAM_DESTROY **with 1 frame queued**, drawn under the empty clip (hidden): `stream 40 ended after 151 frames, 0 dropped, 8 hidden by its clip`; the new stream ended the same way at the close. Final canvas identical to a new connection's (0 differing pixels) | pass |
+| | viewer, `clock` | `stream 40 ended after 151 frames, 0 dropped, 8 hidden by its clip`, `stream 45 ended after 108 frames, 0 dropped, 8 hidden by its clip`; screenshot after: plain desktop | pass |
+| `off` unchanged | probe, close and move | same message order; `0 dropped, 0 hidden by its clip` for every stream (300; 151 and 130 frames) | pass |
+| F4: agent reply log | viewer, `resizeGuest: true`, `SetWindowPos` to 1100x750 and back | `guest display 1072x694`, `agent: message type 2 succeeded`; `guest display 1280x800`, `agent: message type 2 succeeded` | pass |
+
+- On these guests the server always empties a stream's clip before destroying it, whether the window closes or moves.
+  So the new STREAM_DESTROY path ran (1 frame queued after the move) but drew under an empty clip. A destroy that
+  finds frames queued with a visible clip didn't occur: the ~0.4 s clock lead is shorter than spice-server's 1 s
+  stream timeout. The case is covered by the replay tests only.

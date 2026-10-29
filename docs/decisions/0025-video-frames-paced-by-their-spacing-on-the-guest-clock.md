@@ -4,7 +4,8 @@
   user can switch to a mode that follows the guest clock). Audio in `clock` mode: amended by 0030.
 - Date: 2026-10-30
 - Decided by: agent, from Codex's review finding that MJPEG frames were drawn on arrival; the three modes as a
-  setting by the human (2026-10-30)
+  setting by the human (2026-10-30); frames hidden by the clip and frames queued at STREAM_DESTROY by the agent,
+  from live finding F2 ([../verification/2026-10-30-live-options.md](../verification/2026-10-30-live-options.md))
 
 - **Context:** the spec (Video and audio) says "display frames against the guest's multimedia clock, as SpiceSee
   does". Frames were decoded and drawn the moment they arrived, so a burst overwrote frames before any present and
@@ -53,16 +54,36 @@
     after its window was sent goes only into the lifetime total in the log, as spice-gtk keeps playback drops out of
     its arrival reports (review R3, 2026-10-30).
   - One wake for the session: a one-shot timer armed for the earliest queued deadline and cancelled when the queues
-    empty, so an idle session never wakes. Stream destroy, destroy-all, re-create of an id and session end (disconnect
-    or dispose, via the session's cancellation token) drop the queued frames and cancel the wake; a wake already in
-    flight then does nothing.
+    empty, so an idle session never wakes. Destroy-all, re-create of an id and session end (disconnect or dispose, via
+    the session's cancellation token) drop the queued frames and cancel the wake; a wake already in flight then does
+    nothing. STREAM_DESTROY ends the queue as below (Ordering) and cancels the wake if nothing else is queued.
   - Threads: stream state is guarded by one lock, taken before `Canvas.Sync` and never after it. A deferred frame is
     decoded on the timer's thread-pool thread and drawn with `Canvas.BlitFrame` exactly as an immediate one, so it
     raises `Invalidated` under `Canvas.Sync` from that thread.
   - Ordering: draw commands are applied as they arrive, even while an earlier stream frame waits, and that frame is
     drawn over them when it comes due (spice-gtk accepts the same). It is drawn at the destination it arrived with and
-    the stream's current clip, so a STREAM_CLIP sent for a window raised over the video keeps the frame off it, and
-    STREAM_DESTROY (sent before the server redraws the area) discards it.
+    the stream's current clip, so a STREAM_CLIP sent for a window raised over the video keeps the frame off it.
+  - Hidden frames (live F2): in every mode, a frame whose destination the current clip (or the surface) hides
+    entirely when it comes due is not decoded and is counted as *hidden*, in the lifetime total the log prints when
+    the stream ends ("N frames, D dropped, H hidden by its clip"), not in the stream report's drops. This is what
+    happened to the last ~0.4 s of a `clock` stream on win7: when the video's window closes, spice-server draws the
+    desktop over the stream area as an opaque draw, which first shrinks the stream's clip (STREAM_CLIP, to no
+    rectangles once all of it is covered) and only then is sent; the stream lasts until its 1 s timeout
+    (spice-server's source as remembered; the live probe saw 8 frames missing and the stream end 1 s later, the clip
+    messages are not yet confirmed live). The frames still waiting for the guest clock were decoded and blitted with
+    an empty clip, so they reached no pixel and weren't counted (replay test
+    `ClockModeFramesHiddenByTheClipWhileQueuedAreCountedAndNotDecoded`). They must stay off the screen: they show the
+    window before the server's newer desktop draw, and drawing them would leave stale video over the desktop where the
+    server believes the desktop is. The report leaves them out because spice-gtk reports them as shown (it blits with
+    the clip too) and they say nothing about the client keeping up; counted as drops they could make the server's
+    rate control lower a stream that is merely covered.
+  - STREAM_DESTROY with frames still queued (a stream stopped while frames wait, e.g. a window moved, or a clock lead
+    longer than the server's 1 s stream timeout): the newest queued frame is drawn at once, with the current clip and
+    in message order, and the older ones are dropped and counted (as switching to `off` does). The server may draw
+    over the area from the next message on and believes the last frame is on screen; drawing the frames on their
+    schedule after the destroy would overwrite those draws, and discarding all of them (spice-gtk's way) could leave an
+    older frame on screen than the server knows of, with nothing to repair it. Cost: in `clock` mode the end of such
+    a stream jumps up to the clock lead early.
   - Tests replace the clock (`SpiceSession.PacingClock`, internal) with a manual one; replays that never advance time
     stay deterministic, and sessions without MAIN_INIT draw on arrival as before.
 - **Reason:** `off` has the lowest latency and does the least work per frame, which the principles rank first; a

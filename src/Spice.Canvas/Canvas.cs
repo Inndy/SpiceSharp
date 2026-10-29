@@ -678,6 +678,25 @@ public sealed class Canvas : IDisposable
     }
 
     /// <summary>
+    /// Whether <see cref="BlitFrame"/> would draw any pixel: some of <paramref name="dest"/> lies on the surface and
+    /// inside <paramref name="clip"/>. Lets a stream skip decoding a frame its clip hides entirely.
+    /// </summary>
+    public bool IsFrameVisible(uint surfaceId, SpiceRect dest, SpiceClip clip)
+    {
+        if (dest.IsEmpty) return false;
+        lock (Sync)
+        {
+            if (!_surfaces.TryGetValue(surfaceId, out var s)) return false;
+            var box = dest.Intersect(s.Bounds);
+            if (box.IsEmpty) return false;
+            if (clip.Type == SpiceClip.TypeNone) return true;
+            for (int i = 0; i < clip.Count; i++)
+                if (!clip[i].Intersect(box).IsEmpty) return true;
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Copies a decoded video frame into a surface at <paramref name="dest"/>, scaling if needed. Only the visible
     /// (surface- and clip-limited) part of the destination is scaled. Throws <see cref="CanvasException"/> for an
     /// impossible destination.
