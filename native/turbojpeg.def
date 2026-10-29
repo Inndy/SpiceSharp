@@ -1,0 +1,15 @@
+; Exports of turbojpeg.dll: what SpiceViewer binds (decode) plus tj3Compress8/tj3Free, which the tests use to
+; build JPEG fixtures. Everything else in libjpeg-turbo is linked statically and garbage-collected.
+; native/verify.py checks the DLL exports exactly this list.
+LIBRARY turbojpeg.dll
+EXPORTS
+  tj3Init
+  tj3Destroy
+  tj3Get
+  tj3Set
+  tj3DecompressHeader
+  tj3Decompress8
+  tj3Compress8
+  tj3Free
+  tj3GetErrorStr
+  tj3GetErrorCode

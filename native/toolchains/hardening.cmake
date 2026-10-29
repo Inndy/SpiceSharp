@@ -1,0 +1,6 @@
+set(CMAKE_C_FLAGS_INIT "-O2 -mguard=cf")
+set(CMAKE_CXX_FLAGS_INIT "-O2 -mguard=cf")
+set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG" CACHE STRING "Release C flags")
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG" CACHE STRING "Release C++ flags")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static-libgcc -fuse-ld=lld -Wl,--dynamicbase,--high-entropy-va,--nxcompat,--guard-cf")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static-libgcc -fuse-ld=lld -Wl,--dynamicbase,--high-entropy-va,--nxcompat,--guard-cf")

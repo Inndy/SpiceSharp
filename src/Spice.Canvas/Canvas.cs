@@ -1,0 +1,725 @@
+using System.Buffers;
+using System.Collections.Concurrent;
+using Spice.Wire;
+
+namespace Spice.Canvas;
+
+/// <summary>
+/// The software compositor: applies display-channel draw commands to in-memory surfaces, following
+/// spice-common's canvas_base.c / sw_canvas.c semantics. Not thread-safe by itself: callers hold
+/// <see cref="Sync"/> (the session does while applying; the presenter does while reading pixels).
+/// </summary>
+public sealed class Canvas : IDisposable
+{
+    /// <summary>Total surface pixel bytes a session may hold at once; a SURFACE_CREATE beyond it is rejected.</summary>
+    public const long MaxSurfaceBytes = 512L << 20;
+    /// <summary>
+    /// Image-cache capacity in BGRA bytes. This is the pixmap_cache_size the session advertises in DISPLAY_INIT
+    /// ((80 MiB) / 4 pixels): spice-server accounts the cache in descriptor pixels and invalidates entries before it
+    /// would exceed that, so a well-behaved server never trips it. Keep the two in step.
+    /// </summary>
+    public const long ImageCacheBytes = 80L << 20;
+    /// <summary>Cached images kept at once, bounding per-entry overhead for tiny images.</summary>
+    public const int MaxCachedImages = 1 << 17;
+    /// <summary>Largest width or height of a video stream destination.</summary>
+    public const int MaxStreamSide = Surface.MaxSide;
+    /// <summary>Per-command work ceilings (pixels touched plus bookkeeping) for strokes and text.</summary>
+    const long MaxStrokeWork = 1 << 24, MaxGlyphWork = 1 << 26;
+    /// <summary>Per-command ceiling on clip normalisation work (sum of active rectangles over all bands).</summary>
+    const long MaxClipWork = 1 << 22;
+
+    readonly Dictionary<uint, Surface> _surfaces = [];
+    readonly Dictionary<ulong, DecodedImage> _cache = [];
+    readonly List<DecodedImage> _temps = [];
+    readonly ImageDecoder _decoder = new();
+    long _surfaceBytes, _cacheBytes;
+
+    public object Sync { get; } = new();
+    public Surface? Primary { get; private set; }
+    public Dictionary<string, int> Stats { get; } = [];
+    /// <summary>Count of commands that could not be applied (bad data or unsupported features).</summary>
+    public int Errors { get; private set; }
+
+    /// <summary>Raised (under <see cref="Sync"/>) when a primary surface is created or destroyed.</summary>
+    public event Action<Surface?>? PrimaryChanged;
+    /// <summary>Raised (under <see cref="Sync"/>) for each primary-surface rectangle a command changed.</summary>
+    public event Action<SpiceRect>? Invalidated;
+    /// <summary>
+    /// Raised (under <see cref="Sync"/>) when a COPY_BITS on the primary surface moved one whole rectangle: <c>dest</c>
+    /// now holds the pixels that were at <c>dest</c> offset by (<c>dx</c>, <c>dy</c>), all inside the surface.
+    /// <see cref="Invalidated"/> follows for the same rectangle. Lets a presenter pass the move on as a scroll.
+    /// </summary>
+    public event Action<SpiceRect, int, int>? CopiedBits;
+
+    public void Dispose()
+    {
+        ClearCache();
+        _decoder.Dispose();
+    }
+
+    /// <summary>Fast JPEG decoding for JPEG and JPEG_ALPHA images (<see cref="ImageDecoder.FastJpeg"/>). Any thread.</summary>
+    public bool FastJpeg { get => _decoder.FastJpeg; set => _decoder.FastJpeg = value; }
+
+    void Count(string key) => Stats[key] = Stats.GetValueOrDefault(key) + 1;
+
+    // Statistics keys built once, so counting a draw or an ignored message never formats a string.
+    static readonly string[] s_imageKeys = Enumerable.Range(0, 256).Select(i => $"image_{(ImageType)i}").ToArray();
+    static readonly ConcurrentDictionary<ushort, string> s_ignoredKeys = new();
+
+    void Error(string message)
+    {
+        Errors++;
+        Count("error");
+        Log.Warn($"canvas: {message}");
+    }
+
+    /// <summary>Applies one display message. Malformed or unsupported commands are logged and skipped.</summary>
+    public void Apply(ushort type, ReadOnlyMemory<byte> payload)
+    {
+        lock (Sync)
+        {
+            try { ApplyCore(type, payload); }
+            catch (Exception e) when (e is CanvasException or WireException)
+            {
+                Error($"message {type}: {e.Message}");
+            }
+            finally
+            {
+                foreach (var t in _temps) if (!t.IsCached) t.Release();
+                _temps.Clear();
+            }
+        }
+    }
+
+    void ApplyCore(ushort type, ReadOnlyMemory<byte> payload)
+    {
+        switch (type)
+        {
+            case DisplayMsg.SurfaceCreate:
+            {
+                var sc = SurfaceCreate.Parse(payload);
+                long bytes = (long)sc.Width * sc.Height * 4;
+                _surfaces.TryGetValue(sc.SurfaceId, out var old);
+                long remaining = _surfaceBytes - (old is null ? 0 : (long)old.Stride * old.Height);
+                if (remaining + bytes > MaxSurfaceBytes)
+                    throw new CanvasException($"surface {sc.SurfaceId} ({sc.Width}x{sc.Height}) exceeds the {MaxSurfaceBytes >> 20} MiB surface budget");
+                var s = new Surface(sc.SurfaceId, (int)sc.Width, (int)sc.Height, sc.Format, sc.IsPrimary);
+                _surfaces[sc.SurfaceId] = s;
+                _surfaceBytes = remaining + bytes;
+                Count("surface_create");
+                if (s.IsPrimary)
+                {
+                    Primary = s;
+                    PrimaryChanged?.Invoke(s);
+                    Invalidated?.Invoke(s.Bounds);
+                }
+                else if (old is not null && old == Primary)
+                {
+                    Primary = null;
+                    PrimaryChanged?.Invoke(null);
+                }
+                return;
+            }
+            case DisplayMsg.SurfaceDestroy:
+            {
+                uint id = new SpiceReader(payload).U32();
+                if (_surfaces.Remove(id, out var s))
+                {
+                    _surfaceBytes -= (long)s.Stride * s.Height;
+                    if (s == Primary)
+                    {
+                        Primary = null;
+                        PrimaryChanged?.Invoke(null);
+                    }
+                }
+                return;
+            }
+            case DisplayMsg.Mode or DisplayMsg.Mark or DisplayMsg.MonitorsConfig:
+                return;
+            case DisplayMsg.Reset:
+                ClearCache();
+                _decoder.ClearPalettes();
+                _decoder.ClearGlzWindow();
+                return;
+            case DisplayMsg.InvalAllPixmaps:
+                ClearCache();
+                return;
+            case DisplayMsg.InvalList:
+                foreach (var (_, id) in DisplayParse.InvalList(payload)) RemoveCached(id);
+                return;
+            case DisplayMsg.InvalPalette:
+                _decoder.RemovePalette(new SpiceReader(payload).U64());
+                return;
+            case DisplayMsg.InvalAllPalettes:
+                _decoder.ClearPalettes();
+                return;
+            case DisplayMsg.CopyBits or DisplayMsg.DrawFill or DisplayMsg.DrawOpaque or DisplayMsg.DrawCopy or DisplayMsg.DrawBlend
+                or DisplayMsg.DrawBlackness or DisplayMsg.DrawWhiteness or DisplayMsg.DrawInvers or DisplayMsg.DrawRop3
+                or DisplayMsg.DrawStroke or DisplayMsg.DrawText or DisplayMsg.DrawTransparent or DisplayMsg.DrawAlphaBlend:
+                Draw(DrawCommand.Parse(type, payload));
+                return;
+            default:
+                Count(s_ignoredKeys.GetOrAdd(type, static t => $"ignored_{t}"));
+                return;
+        }
+    }
+
+    void ClearCache()
+    {
+        foreach (var img in _cache.Values) img.Release();
+        _cache.Clear();
+        _cacheBytes = 0;
+    }
+
+    void RemoveCached(ulong id)
+    {
+        if (!_cache.Remove(id, out var img)) return;
+        _cacheBytes -= (long)img.Stride * img.Height;
+        img.Release();
+    }
+
+    Surface GetSurface(uint id) => _surfaces.TryGetValue(id, out var s) ? s : throw new CanvasException($"no surface {id}");
+
+    /// <summary>Resolves an image to pixels: cache lookups, surface-as-image, or decoding (then caching if asked).</summary>
+    ImageView Resolve(in SpiceImage? maybe, uint drawingSurface)
+    {
+        if (maybe is not SpiceImage image) throw new CanvasException("missing source image");
+        Count(s_imageKeys[(byte)image.Type]);
+        switch (image.Type)
+        {
+            case ImageType.FromCache or ImageType.FromCacheLossless:
+                return _cache.TryGetValue(image.Descriptor.Id, out var cached)
+                    ? cached.View
+                    : throw new CanvasException($"image {image.Descriptor.Id:x} not in cache");
+            case ImageType.Surface:
+            {
+                var s = GetSurface(image.SurfaceId);
+                if (s.Id != drawingSurface) return s.View;
+                // Reading and writing the same surface: snapshot it first.
+                var copy = DecodedImage.SnapshotOf(s);
+                _temps.Add(copy);
+                return copy.View;
+            }
+        }
+        var img = _decoder.Decode(image);
+        if ((image.Descriptor.Flags & (ImageFlags.CacheMe | ImageFlags.CacheReplaceMe)) != 0)
+        {
+            RemoveCached(image.Descriptor.Id);
+            long bytes = (long)img.Stride * img.Height;
+            if (_cache.Count >= MaxCachedImages || _cacheBytes + bytes > ImageCacheBytes)
+            {
+                // The server promised to stay within the advertised cache; refuse rather than evict silently.
+                // The image is still drawn; later FROM_CACHE references to it fail visibly.
+                Error($"image {image.Descriptor.Id:x} not cached: cache budget exceeded ({_cache.Count} images, {_cacheBytes} bytes)");
+                _temps.Add(img);
+                return img.View;
+            }
+            img.IsCached = true;
+            _cache[image.Descriptor.Id] = img;
+            _cacheBytes += bytes;
+        }
+        else _temps.Add(img);
+        return img.View;
+    }
+
+    PixelSource BrushSource(in SpiceBrush brush, uint surface) => brush.Type switch
+    {
+        // canvas_base.c's draw_brush paints black for BRUSH_TYPE_NONE.
+        BrushType.None => PixelSource.Solid(0),
+        BrushType.Solid => PixelSource.Solid(brush.Color),
+        _ => PixelSource.Pattern(Resolve(brush.Pattern, surface), brush.PatternPos.X, brush.PatternPos.Y),
+    };
+
+    /// <summary>
+    /// A QMask bitmap as coverage. Mask pixel for surface (x,y) is (x - box.left + pos.x, y - box.top + pos.y).
+    /// Only the part inside <paramref name="visible"/> is materialised; pixels outside the mask are uncovered.
+    /// </summary>
+    CoverageMask? ResolveMask(in SpiceQMask mask, SpiceRect box, SpiceRect visible, uint surface)
+    {
+        if (mask.Bitmap is not SpiceImage bmp) return null;
+        bool invert = (mask.Flags & SpiceQMask.FlagInvers) != 0;
+        long ox = (long)box.Left - mask.Pos.X, oy = (long)box.Top - mask.Pos.Y;
+        if (bmp.Type == ImageType.Bitmap && bmp.BitmapFormat is BitmapFormat.A1Le or BitmapFormat.A1Be)
+        {
+            // 1-bit masks carry no palette (canvas_get_bitmap_mask): bit set = covered.
+            int w = (int)bmp.BitmapWidth, h = (int)bmp.BitmapHeight;
+            long stride = bmp.Stride;
+            if (w <= 0 || h <= 0 || stride < (w + 7) / 8 || bmp.Data.Length < stride * h) throw new CanvasException("mask bitmap too short");
+            var m = VisibleMask(ox, oy, w, h, visible);
+            if (m.Width == 0) return m;
+            bool topDown = (bmp.BitmapFlags & BitmapFlags.TopDown) != 0, be = bmp.BitmapFormat == BitmapFormat.A1Be;
+            var data = bmp.Data.Span;
+            for (int y = 0; y < m.Height; y++)
+            {
+                int my = (int)(m.OriginY + y - oy);
+                var row = data.Slice((int)((topDown ? my : h - 1 - my) * stride), (int)stride);
+                var cov = m.Coverage.AsSpan(y * m.Width, m.Width);
+                for (int x = 0; x < m.Width; x++)
+                {
+                    int mx = (int)(m.OriginX + x - ox);
+                    int bit = be ? (row[mx >> 3] >> (7 - (mx & 7))) & 1 : (row[mx >> 3] >> (mx & 7)) & 1;
+                    cov[x] = (bit != 0) != invert ? (byte)255 : (byte)0;
+                }
+            }
+            return m;
+        }
+        var img = Resolve(bmp, surface);
+        var cm = VisibleMask(ox, oy, img.Width, img.Height, visible);
+        for (int y = 0; y < cm.Height; y++)
+        {
+            var row = img.Row((int)(cm.OriginY + y - oy));
+            var cov = cm.Coverage.AsSpan(y * cm.Width, cm.Width);
+            int sx = (int)(cm.OriginX - ox);
+            for (int x = 0; x < cm.Width; x++) cov[x] = ((row[sx + x] & 0xFFFFFF) != 0) != invert ? (byte)255 : (byte)0;
+        }
+        return cm;
+    }
+
+    /// <summary>An empty mask covering the intersection of a w×h mask at (ox, oy) with <paramref name="visible"/>.</summary>
+    static CoverageMask VisibleMask(long ox, long oy, int w, int h, SpiceRect visible)
+    {
+        long l = Math.Max(ox, visible.Left), t = Math.Max(oy, visible.Top);
+        long r = Math.Min(ox + w, visible.Right), b = Math.Min(oy + h, visible.Bottom);
+        return l < r && t < b ? CoverageMask.Rent((int)(r - l), (int)(b - t), (int)l, (int)t) : CoverageMask.Rent(0, 0, 0, 0);
+    }
+
+    static SpiceRect Bounds(ReadOnlySpan<SpiceRect> rects)
+    {
+        var u = default(SpiceRect);
+        foreach (var r in rects) u = u.Union(r);
+        return u;
+    }
+
+    /// <summary>
+    /// The draw box clipped to the surface and to the clip list, as non-overlapping rectangles (upstream clips with a
+    /// pixman region, so each covered pixel is drawn once). Results live in <paramref name="stack"/> or, when they
+    /// don't fit, in <paramref name="rented"/> (from <see cref="ArrayPool{T}"/>; the caller returns it).
+    /// </summary>
+    static int ClipRects(in DisplayBase b, Surface s, Span<SpiceRect> stack, out SpiceRect[]? rented)
+    {
+        rented = null;
+        var box = b.Box.Intersect(s.Bounds);
+        if (box.IsEmpty) return 0;
+        if (b.Clip.Type == SpiceClip.TypeNone) { stack[0] = box; return 1; }
+        int n = b.Clip.Count;
+        var into = stack;
+        if (n > into.Length) { rented = ArrayPool<SpiceRect>.Shared.Rent(n); into = rented; }
+        int k = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var r = b.Clip[i].Intersect(box);
+            if (!r.IsEmpty) into[k++] = r;
+        }
+        if (k <= 1 || (k <= 32 && Disjoint(into[..k]))) return k;
+        return Normalize(ref rented, into[..k]);
+    }
+
+    static bool Disjoint(ReadOnlySpan<SpiceRect> rects)
+    {
+        for (int i = 1; i < rects.Length; i++)
+            for (int j = 0; j < i; j++)
+                if (!rects[i].Intersect(rects[j]).IsEmpty) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Rewrites overlapping rectangles as their union in y-x bands (pixman's region form). Output goes to a pooled
+    /// array assigned to <paramref name="rented"/> (any previous one is returned to the pool). Rarely used: servers
+    /// send region-derived, already disjoint clip lists.
+    /// </summary>
+    static int Normalize(ref SpiceRect[]? rented, Span<SpiceRect> input)
+    {
+        int k = input.Length;
+        var pool = ArrayPool<SpiceRect>.Shared;
+        var rects = pool.Rent(k);
+        var ys = ArrayPool<int>.Shared.Rent(2 * k);
+        var active = ArrayPool<int>.Shared.Rent(k);
+        var spans = ArrayPool<(int L, int R)>.Shared.Rent(k);
+        var output = pool.Rent(Math.Max(16, k));
+        try
+        {
+            input.CopyTo(rects);
+            var sorted = rects.AsSpan(0, k);
+            sorted.Sort(static (p, q) => p.Top.CompareTo(q.Top));
+            for (int i = 0; i < k; i++) { ys[2 * i] = sorted[i].Top; ys[2 * i + 1] = sorted[i].Bottom; }
+            var edges = ys.AsSpan(0, 2 * k);
+            edges.Sort();
+            int m = 0;
+            for (int i = 0; i < edges.Length; i++) if (m == 0 || edges[m - 1] != edges[i]) edges[m++] = edges[i];
+
+            int next = 0, activeCount = 0, count = 0, prevStart = 0, prevCount = 0;
+            long work = 0;
+            for (int e = 0; e + 1 < m; e++)
+            {
+                int y0 = edges[e], y1 = edges[e + 1];
+                // Drop rects that ended, add those that start here.
+                int keep = 0;
+                for (int i = 0; i < activeCount; i++) if (sorted[active[i]].Bottom > y0) active[keep++] = active[i];
+                activeCount = keep;
+                while (next < k && sorted[next].Top <= y0) active[activeCount++] = next++;
+                work += activeCount + 1;
+                if (work > MaxClipWork) throw new CanvasException($"clip list of {k} rectangles is too complex");
+                if (activeCount == 0) { prevCount = 0; continue; }
+
+                for (int i = 0; i < activeCount; i++) spans[i] = (sorted[active[i]].Left, sorted[active[i]].Right);
+                var band = spans.AsSpan(0, activeCount);
+                band.Sort(static (p, q) => p.L.CompareTo(q.L));
+                int merged = 0;
+                for (int i = 0; i < band.Length; i++)
+                {
+                    if (merged > 0 && band[i].L <= band[merged - 1].R) band[merged - 1].R = Math.Max(band[merged - 1].R, band[i].R);
+                    else band[merged++] = band[i];
+                }
+                // Extend the previous band's rects when this band continues them exactly.
+                bool same = prevCount == merged && output[prevStart].Bottom == y0;
+                for (int i = 0; same && i < merged; i++) same = output[prevStart + i].Left == band[i].L && output[prevStart + i].Right == band[i].R;
+                if (same)
+                {
+                    for (int i = 0; i < merged; i++) output[prevStart + i] = output[prevStart + i] with { Bottom = y1 };
+                    continue;
+                }
+                if (count + merged > output.Length)
+                {
+                    var bigger = pool.Rent(Math.Max(output.Length * 2, count + merged));
+                    output.AsSpan(0, count).CopyTo(bigger);
+                    pool.Return(output);
+                    output = bigger;
+                }
+                prevStart = count; prevCount = merged;
+                for (int i = 0; i < merged; i++) output[count++] = new SpiceRect(band[i].L, y0, band[i].R, y1);
+            }
+            if (rented is not null) pool.Return(rented);
+            rented = output;
+            output = null!;
+            return count;
+        }
+        finally
+        {
+            pool.Return(rects);
+            ArrayPool<int>.Shared.Return(ys);
+            ArrayPool<int>.Shared.Return(active);
+            ArrayPool<(int, int)>.Shared.Return(spans);
+            if (output is not null) pool.Return(output);
+        }
+    }
+
+    void Draw(in DrawCommand c)
+    {
+        var s = GetSurface(c.Base.SurfaceId);
+        Span<SpiceRect> stack = stackalloc SpiceRect[16];
+        int n = ClipRects(c.Base, s, stack, out var rented);
+        try { Draw(c, s, rented is null ? stack[..n] : rented.AsSpan(0, n)); }
+        finally { if (rented is not null) ArrayPool<SpiceRect>.Shared.Return(rented); }
+    }
+
+    void Draw(in DrawCommand c, Surface s, ReadOnlySpan<SpiceRect> rects)
+    {
+        Count(c.Kind switch
+        {
+            DisplayMsg.CopyBits => "copy_bits", DisplayMsg.DrawFill => "fill", DisplayMsg.DrawOpaque => "opaque",
+            DisplayMsg.DrawCopy => "copy", DisplayMsg.DrawBlend => "blend", DisplayMsg.DrawBlackness => "blackness",
+            DisplayMsg.DrawWhiteness => "whiteness", DisplayMsg.DrawInvers => "invers", DisplayMsg.DrawRop3 => "rop3",
+            DisplayMsg.DrawStroke => "stroke", DisplayMsg.DrawText => "text", DisplayMsg.DrawTransparent => "transparent",
+            _ => "alpha_blend",
+        });
+        if (rects.IsEmpty) return;
+        var box = c.Base.Box;
+        var visible = Bounds(rects);
+
+        switch (c.Kind)
+        {
+            case DisplayMsg.CopyBits:
+            {
+                int dx = c.SourcePos.X - box.Left, dy = c.SourcePos.Y - box.Top;
+                if (rects.Length == 1)
+                {
+                    Raster.CopyBits(s, rects[0], dx, dy);
+                    // Rects are clipped to the surface; report a scroll only when the source is inside it too.
+                    var source = rects[0].Offset(dx, dy);
+                    if (s.IsPrimary && source.Intersect(s.Bounds) == source) CopiedBits?.Invoke(rects[0], dx, dy);
+                }
+                else
+                {
+                    // Several clip rects: copy from a snapshot so one rect's write never feeds another's read.
+                    var snap = DecodedImage.SnapshotOf(s);
+                    _temps.Add(snap);
+                    foreach (var r in rects) Raster.Copy(s, r, snap.View, dx, dy);
+                }
+                break;
+            }
+            case DisplayMsg.DrawFill:
+            {
+                var src = BrushSource(c.Brush, s.Id);
+                using var mask = ResolveMask(c.Mask, box, visible, s.Id);
+                foreach (var r in rects) Raster.Draw(s, r, src, c.RopDescriptor, mask);
+                break;
+            }
+            case DisplayMsg.DrawCopy or DisplayMsg.DrawBlend:
+            {
+                var (img, dx, dy) = SourceFor(c, s, visible);
+                using var mask = ResolveMask(c.Mask, box, visible, s.Id);
+                var src = PixelSource.FromImage(img, dx, dy);
+                foreach (var r in rects) Raster.Draw(s, r, src, c.RopDescriptor, mask);
+                break;
+            }
+            case DisplayMsg.DrawOpaque:
+            {
+                var (img, dx, dy) = SourceFor(c, s, visible);
+                var brush = BrushSource(c.Brush, s.Id);
+                using var mask = ResolveMask(c.Mask, box, visible, s.Id);
+                // canvas_base.c combines (brush, src): INVERS_SRC inverts the bitmap, INVERS_BRUSH the brush.
+                ushort rop = c.RopDescriptor;
+                ushort brushRop = (ushort)(rop & ~(Ropd.InversSrc | Ropd.InversDest));
+                if ((rop & Ropd.InversSrc) != 0) brushRop |= Ropd.InversDest;
+                var srcPx = PixelSource.FromImage(img, dx, dy);
+                foreach (var r0 in rects)
+                {
+                    var r = r0;
+                    for (int y = r.Top; y < r.Bottom; y++)
+                    {
+                        var row = s.Row(y);
+                        for (int x = r.Left; x < r.Right; x++)
+                        {
+                            if (mask is not null && !mask.Covers(x, y)) continue;
+                            if (!srcPx.TrySample(x, y, out uint sp) || !brush.TrySample(x, y, out uint bp)) continue;
+                            row[x] = Raster.RopCombine(sp, bp, brushRop) | 0xFF000000;
+                        }
+                    }
+                }
+                break;
+            }
+            case DisplayMsg.DrawBlackness or DisplayMsg.DrawWhiteness or DisplayMsg.DrawInvers:
+            {
+                using var mask = ResolveMask(c.Mask, box, visible, s.Id);
+                ushort rop = c.Kind == DisplayMsg.DrawInvers ? Ropd.OpInvers : Ropd.OpPut;
+                var src = PixelSource.Solid(c.Kind == DisplayMsg.DrawWhiteness ? 0xFFFFFFu : 0u);
+                foreach (var r in rects) Raster.Draw(s, r, src, rop, mask);
+                break;
+            }
+            case DisplayMsg.DrawRop3:
+            {
+                var (img, dx, dy) = SourceFor(c, s, visible);
+                var brush = BrushSource(c.Brush, s.Id);
+                using var mask = ResolveMask(c.Mask, box, visible, s.Id);
+                foreach (var r in rects) Raster.DrawRop3(s, r, img, dx, dy, brush, c.Rop3, mask);
+                break;
+            }
+            case DisplayMsg.DrawTransparent:
+            {
+                var (img, dx, dy) = SourceFor(c, s, visible, forceNearest: true);
+                foreach (var r in rects) Raster.DrawTransparent(s, r, img, dx, dy, c.TrueColor);
+                break;
+            }
+            case DisplayMsg.DrawAlphaBlend:
+            {
+                var (img, dx, dy) = SourceFor(c, s, visible);
+                bool srcAlpha = img.HasAlpha || (c.AlphaFlags & 2) != 0;
+                foreach (var r in rects) Raster.AlphaBlend(s, r, img, dx, dy, c.Alpha, srcAlpha);
+                break;
+            }
+            case DisplayMsg.DrawText:
+                DrawText(c, s, rects, visible);
+                break;
+            case DisplayMsg.DrawStroke:
+                DrawStroke(c, s, rects, visible);
+                break;
+        }
+
+        if (s.IsPrimary)
+            foreach (var r in rects) Invalidated?.Invoke(r);
+    }
+
+    /// <summary>
+    /// The source image for a copy-like command. When src_area differs in size from the box it is scaled to the box,
+    /// but only the part inside <paramref name="visible"/> (the clipped draw) is computed.
+    /// </summary>
+    (ImageView Img, int Dx, int Dy) SourceFor(in DrawCommand c, Surface s, SpiceRect visible, bool forceNearest = false)
+    {
+        var img = Resolve(c.Source, s.Id);
+        var box = c.Base.Box;
+        var area = c.SourceArea;
+        if (area.Width == box.Width && area.Height == box.Height)
+            return (img, area.Left - box.Left, area.Top - box.Top);
+        if (box.Width <= 0 || box.Height <= 0) throw new CanvasException("bad scaled box");
+        Count("scaled");
+        var win = visible.Intersect(box);
+        if (win.IsEmpty) throw new CanvasException("scaled draw outside its box");
+        var scaled = Raster.ScaleWindow(img, area, box.Width, box.Height, win.Offset(-box.Left, -box.Top),
+            forceNearest || c.ScaleMode == 1, flipY: false);
+        _temps.Add(scaled);
+        return (scaled.View, -win.Left, -win.Top);
+    }
+
+    /// <summary>
+    /// DRAW_TEXT: back area with back brush (PUT), then the glyph string as one mask (canvas_get_str_mask: glyphs are
+    /// OR-ed for A1, max-ed for A4/A8) through the fore brush. A1 keeps fore_mode as a binary mask; A4/A8 keep their
+    /// coverage and composite OVER like sw_canvas.c. The mask covers only the visible part of the string.
+    /// </summary>
+    void DrawText(in DrawCommand c, Surface s, ReadOnlySpan<SpiceRect> rects, SpiceRect visible)
+    {
+        if (!c.BackArea.IsEmpty && c.BackBrush.Type != BrushType.None)
+        {
+            var back = BrushSource(c.BackBrush, s.Id);
+            foreach (var r in rects) Raster.Draw(s, r.Intersect(c.BackArea), back, Ropd.OpPut, null);
+        }
+        if (c.Brush.Type == BrushType.None) return;
+        var fore = BrushSource(c.Brush, s.Id);
+        var str = new SpiceReader(c.Vector);
+        ushort count = str.U16();
+        byte flags = str.U8();
+        int bpp = (flags & 4) != 0 ? 8 : (flags & 2) != 0 ? 4 : 1;
+        var glyphs = str;
+
+        // Pass 1: the visible part of the union of glyph boxes.
+        var area = default(SpiceRect);
+        for (int g = 0; g < count; g++)
+            if (NextGlyph(ref str, bpp, out var gb, out _, out _) && !gb.IsEmpty) area = area.Union(gb.Intersect(visible));
+        if (area.IsEmpty) return;
+
+        // Pass 2: accumulate coverage of the visible glyph pixels only.
+        using var mask = CoverageMask.Rent(area.Width, area.Height, area.Left, area.Top);
+        long work = 0;
+        for (int g = 0; g < count; g++)
+        {
+            if (!NextGlyph(ref glyphs, bpp, out var gb, out var data, out int rowBytes)) continue;
+            var v = gb.Intersect(area);
+            if (v.IsEmpty) continue;
+            work += (long)v.Width * v.Height;
+            if (work > MaxGlyphWork) throw new CanvasException("text too expensive");
+            int h = gb.Height;
+            for (int y = v.Top; y < v.Bottom; y++)
+            {
+                // canvas_put_glyph_bits reads glyph rows bottom-up (RASTER_TOP_DOWN is unimplemented upstream).
+                var row = data.Slice((h - 1 - (y - gb.Top)) * rowBytes, rowBytes);
+                var cov = mask.Coverage.AsSpan((y - area.Top) * area.Width, area.Width);
+                for (int x = v.Left; x < v.Right; x++)
+                {
+                    int gx = x - gb.Left;
+                    int value = bpp switch
+                    {
+                        1 => ((row[gx >> 3] >> (7 - (gx & 7))) & 1) * 255,
+                        // canvas_put_glyph_bits: high nibble first, each kept as nibble << 4.
+                        4 => (gx & 1) == 0 ? row[gx >> 1] & 0xF0 : (row[gx >> 1] << 4) & 0xF0,
+                        _ => row[gx],
+                    };
+                    int i = x - area.Left;
+                    if (value > cov[i]) cov[i] = (byte)value;
+                }
+            }
+        }
+        foreach (var r in rects)
+        {
+            var rr = r.Intersect(area);
+            if (rr.IsEmpty) continue;
+            if (bpp == 1) Raster.Draw(s, rr, fore, c.ForeMode, mask);
+            else Raster.DrawOver(s, rr, fore, mask);
+        }
+    }
+
+    /// <summary>Reads one SpiceRasterGlyph; false when it is empty or its position is out of range.</summary>
+    static bool NextGlyph(ref SpiceReader str, int bpp, out SpiceRect box, out ReadOnlySpan<byte> data, out int rowBytes)
+    {
+        int rx = str.I32(), ry = str.I32(), gx = str.I32(), gy = str.I32();
+        int w = str.U16(), h = str.U16();
+        rowBytes = (w * bpp + 7) / 8;
+        long size = (long)rowBytes * h;
+        if (size > int.MaxValue) throw new CanvasException("glyph too large");
+        data = str.Bytes((int)size).Span;
+        box = default;
+        if (w == 0 || h == 0) return false;
+        long left = (long)rx + gx, top = (long)ry + gy;
+        if (left < int.MinValue / 2 || left > int.MaxValue / 2 || top < int.MinValue / 2 || top > int.MaxValue / 2) return false;
+        box = new SpiceRect((int)left, (int)top, (int)left + w, (int)top + h);
+        return true;
+    }
+
+    /// <summary>
+    /// DRAW_STROKE: 1-pixel solid lines along the path (dash styles are not drawn). Each segment is clipped to each
+    /// clip rectangle before rasterising, so offscreen geometry costs nothing; total work per command is capped.
+    /// </summary>
+    void DrawStroke(in DrawCommand c, Surface s, ReadOnlySpan<SpiceRect> rects, SpiceRect visible)
+    {
+        var src = BrushSource(c.Brush, s.Id);
+        var path = new SpiceReader(c.Vector);
+        uint segments = path.U32();
+        if (segments > 1 << 16) throw new CanvasException("too many path segments");
+        int lastX = 0, lastY = 0, startX = 0, startY = 0;
+        bool have = false;
+        ushort rop = c.ForeMode;
+        long work = 0;
+        for (uint i = 0; i < segments; i++)
+        {
+            byte flags = path.U8();
+            uint count = path.U32();
+            if (count > 1 << 16) throw new CanvasException("too many path points");
+            for (uint p = 0; p < count; p++)
+            {
+                // FIXED28_4 rounded to the nearest pixel (fix_to_int).
+                int x = (path.I32() + 8) >> 4, y = (path.I32() + 8) >> 4;
+                bool begin = p == 0 && ((flags & 1) != 0 || !have);
+                if (begin) { startX = x; startY = y; }
+                else work += Segment(s, lastX, lastY, x, y, rects, visible, src, rop);
+                lastX = x; lastY = y; have = true;
+                if (work > MaxStrokeWork) throw new CanvasException("stroke too expensive");
+            }
+            if ((flags & 8) != 0 && have) work += Segment(s, lastX, lastY, startX, startY, rects, visible, src, rop);
+        }
+    }
+
+    static long Segment(Surface s, int x0, int y0, int x1, int y1, ReadOnlySpan<SpiceRect> rects, SpiceRect visible, in PixelSource src, ushort rop)
+    {
+        var seg = new SpiceRect(Math.Min(x0, x1), Math.Min(y0, y1), Math.Max(x0, x1) + 1, Math.Max(y0, y1) + 1);
+        if (seg.Intersect(visible).IsEmpty) return 1;
+        long work = 1;
+        // Clip rects are disjoint, so every visible pixel is plotted exactly once.
+        foreach (var r in rects)
+            work += seg.Intersect(r).IsEmpty ? 1 : Raster.LineInRect(s, x0, y0, x1, y1, r, src, rop);
+        return work;
+    }
+
+    /// <summary>
+    /// Copies a decoded video frame into a surface at <paramref name="dest"/>, scaling if needed. Only the visible
+    /// (surface- and clip-limited) part of the destination is scaled. Throws <see cref="CanvasException"/> for an
+    /// impossible destination.
+    /// </summary>
+    public void BlitFrame(uint surfaceId, SpiceRect dest, SpiceClip clip, ImageView frame, bool topDown)
+    {
+        if (dest.Width > MaxStreamSide || dest.Height > MaxStreamSide)
+            throw new CanvasException($"stream destination {dest} exceeds {MaxStreamSide} pixels");
+        if (dest.IsEmpty || frame.IsEmpty || frame.Width <= 0 || frame.Height <= 0) return;
+        lock (Sync)
+        {
+            if (!_surfaces.TryGetValue(surfaceId, out var s)) return;
+            var b = new DisplayBase { SurfaceId = surfaceId, Box = dest, Clip = clip };
+            Span<SpiceRect> stack = stackalloc SpiceRect[16];
+            int n = ClipRects(b, s, stack, out var rented);
+            DecodedImage? temp = null;
+            try
+            {
+                var rects = rented is null ? stack[..n] : rented.AsSpan(0, n);
+                if (n == 0) return;
+                if (topDown && frame.Width == dest.Width && frame.Height == dest.Height)
+                    foreach (var r in rects) Raster.Copy(s, r, frame, -dest.Left, -dest.Top);
+                else
+                {
+                    var win = Bounds(rects);
+                    temp = Raster.ScaleWindow(frame, new SpiceRect(0, 0, frame.Width, frame.Height), dest.Width, dest.Height,
+                        win.Offset(-dest.Left, -dest.Top), nearest: false, flipY: !topDown);
+                    foreach (var r in rects) Raster.Copy(s, r, temp.View, -win.Left, -win.Top);
+                }
+                if (s.IsPrimary) foreach (var r in rects) Invalidated?.Invoke(r);
+            }
+            finally
+            {
+                temp?.Release();
+                if (rented is not null) ArrayPool<SpiceRect>.Shared.Return(rented);
+            }
+        }
+    }
+
+    /// <summary>A PNG of the primary surface (for tests and spice-cli dump).</summary>
+    public byte[]? SnapshotPrimaryPng()
+    {
+        lock (Sync) return Primary is null ? null : Png.Encode(Primary.Pixels, Primary.Width, Primary.Height, Primary.Stride);
+    }
+}

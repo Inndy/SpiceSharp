@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Spice.Wire\Spice.Wire.csproj" />
+    <ProjectReference Include="..\VvFile\VvFile.csproj" />
+  </ItemGroup>
+</Project>

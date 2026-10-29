@@ -1,0 +1,72 @@
+--- reference HEAD
+
++++ vendored
+
+@@ -227,6 +227,8 @@
+
+         /* check if the hval key identical*/
+         // no need to check ref limit here because the word size in the htab is 3 pixels
+         if (!SAME_PIXEL(*ref, *ip)) {
++            ref++;
++            ip++;
+             goto literal;
+         }
+         ref++;
+@@ -235,6 +237,8 @@
+
+         /* minimum match length for rgb16 is 2 and for plt and alpha is 3 */
+ #if defined(LZ_PLT) || defined(LZ_RGB_ALPHA) || defined(LZ_RGB16) || defined(LZ_A8)
+         if (!SAME_PIXEL(*ref, *ip)) {
++            ref++;
++            ip++;
+             goto literal;
+         }
+         ref++;
+@@ -243,6 +247,8 @@
+
+ 
+ #if defined(LZ_PLT) || defined(LZ_RGB_ALPHA) || defined(LZ_A8)
+         if (!SAME_PIXEL(*ref, *ip)) {
++            ref++;
++            ip++;
+             goto literal;
+         }
+         ref++;
+@@ -260,6 +266,8 @@
+
+             }
+ #endif
+             if (!SAME_PIXEL(*ref, *ip)) {
++                ref++;
++                ip++;
+                 goto literal;
+             }
+             ref++;
+@@ -267,6 +275,8 @@
+
+             len++;
+ #if defined(LZ_PLT) || defined(LZ_RGB_ALPHA) || defined(LZ_A8)
+             if (!SAME_PIXEL(*ref, *ip)) {
++                ref++;
++                ip++;
+                 goto literal;
+             }
+             ref++;
+@@ -290,6 +300,7 @@
+
+                                                            //       ones in order to spare
+                                                            //       ref < ref_limit
+                 if (!SAME_PIXEL(*ref, x)) {
++                    ref++;
+                     break;
+                 } else {
+                     ref++;
+@@ -302,6 +313,7 @@
+
+             //       (ref++ != ip++) outside a loop
+             while ((ip < ip_bound) && (ref < ref_limit)) {
+                 if (!SAME_PIXEL(*ref, *ip)) {
++                    ref++;
+                     ip++;
+                     break;
+                 } else {

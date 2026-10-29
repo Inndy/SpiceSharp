@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <SpiceNativeArch Condition="'$(SpiceNativeArch)' == '' and '$(RuntimeIdentifier)' == 'win-arm64'">arm64</SpiceNativeArch>
+    <SpiceNativeArch Condition="'$(SpiceNativeArch)' == ''">x64</SpiceNativeArch>
+    <SpiceNativeDirectory>$(MSBuildThisFileDirectory)out/win-$(SpiceNativeArch)/</SpiceNativeDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <_SpiceNativeDll Include="$(SpiceNativeDirectory)spicecodec.dll;$(SpiceNativeDirectory)turbojpeg.dll;$(SpiceNativeDirectory)opus.dll" />
+    <Content Include="$(SpiceNativeDirectory)spicecodec.dll" Condition="Exists('$(SpiceNativeDirectory)spicecodec.dll')" Link="spicecodec.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(SpiceNativeDirectory)turbojpeg.dll" Condition="Exists('$(SpiceNativeDirectory)turbojpeg.dll')" Link="turbojpeg.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(SpiceNativeDirectory)opus.dll" Condition="Exists('$(SpiceNativeDirectory)opus.dll')" Link="opus.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="WarnMissingSpiceNativeDlls" BeforeTargets="PrepareForBuild">
+    <Warning Condition="!Exists('%(_SpiceNativeDll.Identity)')" Text="Native codec %(_SpiceNativeDll.Identity) is missing. Run bash native/build.sh $(SpiceNativeArch)." />
+  </Target>
+</Project>

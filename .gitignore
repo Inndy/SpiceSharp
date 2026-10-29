@@ -1,0 +1,40 @@
+# Secrets and connection files (one-time passwords). Never commit these.
+PVE_TOKEN_DONT_COMMIT.txt
+*_DONT_COMMIT*
+*.vv
+!tests/fixtures/**/*.vv
+
+# Build output
+bin/
+obj/
+out/
+artifacts/
+native/build/
+native/out/
+native/downloads/
+TestResults/
+*.binlog
+
+# Test and run output
+*.actual.png
+*.log
+*.etl
+data/
+
+# Local reference clones and scratch
+refs/
+
+# Editor, IDE and OS files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.DotSettings.user
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local agent settings (shared instructions are AGENTS.md / CLAUDE.md)
+.claude/settings.local.json
+CLAUDE.local.md

@@ -1,0 +1,22 @@
+--- reference HEAD
+
++++ vendored
+
+@@ -24,6 +24,16 @@
+
+ 
+ typedef struct SpiceGlzDecoderWindow SpiceGlzDecoderWindow;
+ 
++/* SPICESEE MODIFICATION: exposes the most recently decoded image to codec_bridge.c, which has no
++   pixman surface to receive it through. Defined in decode-glz.c. See VENDORED.md. */
++struct glz_image;
++struct glz_image *glz_decoder_window_last(SpiceGlzDecoderWindow *w);
++const uint8_t *sc_glz_image_data(const struct glz_image *img);
++int sc_glz_image_width(const struct glz_image *img);
++int sc_glz_image_height(const struct glz_image *img);
++int sc_glz_image_stride(const struct glz_image *img);
++int sc_glz_image_top_down(const struct glz_image *img);
++
+ SpiceGlzDecoderWindow *glz_decoder_window_new(void);
+ void glz_decoder_window_clear(SpiceGlzDecoderWindow *w);
+ void glz_decoder_window_destroy(SpiceGlzDecoderWindow *w);

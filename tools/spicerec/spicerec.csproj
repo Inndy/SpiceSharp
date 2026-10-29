@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SpiceRec</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Spice.Session\Spice.Session.csproj" />
+  </ItemGroup>
+  <Import Project="../../native/NativeDlls.targets" />
+</Project>

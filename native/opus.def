@@ -1,0 +1,10 @@
+; Exports of opus.dll: the decoder API SpiceViewer binds or may bind (ctl, version string). The encoder, the
+; multistream/projection APIs and the rest of libopus are linked statically and garbage-collected.
+; native/verify.py checks the DLL exports exactly this list.
+LIBRARY opus.dll
+EXPORTS
+  opus_decoder_create
+  opus_decoder_destroy
+  opus_decode
+  opus_decoder_ctl
+  opus_get_version_string

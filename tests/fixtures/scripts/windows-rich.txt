@@ -1,0 +1,26 @@
+# Open and dismiss the Start menu, Paint, and the standard wallpaper viewer.
+wait 1200
+key win
+wait 1400
+key esc
+key win+r
+wait 500
+type mspaint
+key enter
+wait 2200
+key alt+space
+key m
+key right
+key right
+key right
+key enter
+wait 700
+key alt+f4
+wait 500
+key win+r
+wait 500
+type C:\Windows\Web\Wallpaper\Windows\img0.jpg
+key enter
+wait 3500
+key alt+f4
+wait 1000

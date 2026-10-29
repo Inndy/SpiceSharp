@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Spice.Transport\Spice.Transport.csproj" />
+    <ProjectReference Include="..\Spice.Canvas\Spice.Canvas.csproj" />
+    <ProjectReference Include="..\Spice.Media\Spice.Media.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Stream pacing tests drive the display handler with a manual clock (docs/decisions/0025). -->
+    <InternalsVisibleTo Include="Spice.Replay.Tests" />
+  </ItemGroup>
+</Project>

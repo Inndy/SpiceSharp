@@ -1,0 +1,5 @@
+# UBSan suppressions for run.sh --asan. Only the vendored LZ *encoder* is listed: its hash (spice-common
+# lz_compress_tmpl.c, HASH_FUNC) shifts and adds signed ints that overflow. It is upstream code that builds the
+# test inputs here and is not used by the viewer. Nothing in the decoders is suppressed.
+signed-integer-overflow:lz_compress_tmpl.c
+shift-base:lz_compress_tmpl.c

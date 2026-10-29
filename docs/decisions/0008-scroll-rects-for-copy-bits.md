@@ -1,0 +1,9 @@
+# 0008. Scroll rects for COPY_BITS
+
+- Status: Accepted
+- Date: 2026-10-29
+- Decided by: agent (spec silent), reviewed by Codex
+
+- **Context:** the draft asks for SPICE COPY_BITS to be passed to `Present1` as the DXGI scroll rectangle. `Present1` takes one scroll rect per present, and on a flip-model chain the back buffer we write is two presents old.
+- **Decision:** `Canvas` raises `CopiedBits(dest, dx, dy)` (forwarded as `SpiceSession.CopiedBits`) when a COPY_BITS on the primary surface moved one whole rectangle with its source inside the surface, just before the usual `Invalidated(dest)`. On the direct path the presenter passes it as `pScrollRect` = destination and `pScrollOffset` = (−dx, −dy), and leaves the destination out of the dirty rects. The back buffer still gets the destination uploaded from the CPU framebuffer like any dirty rect (this update's and the previous update's rectangles), so it is complete whether or not the compositor applies the scroll itself. The scroll is used only when it is the first COPY_BITS since the last present and nothing changed inside its source area before it; a second COPY_BITS, a changed source, a clipped (multi-rectangle) COPY_BITS, a guest cropped at the texture limit, or the letterbox path fall back to plain dirty rects. A pure scroll with no other change passes one pixel of the destination as a dirty rect, because zero dirty rects would mean "the whole frame changed". `Presenter.ScrollPresentCount` counts scroll presents.
+- **Reason:** follows the draft (less recomposition and RDP traffic when windows scroll in the guest) without trusting DXGI to fill the back buffer for us. Verified offscreen (window capture after each present matched the framebuffer exactly through repeated scrolls, double scrolls and pure scrolls) on hardware, WARP and feature level 9_3; what DWM and RDP do with the scroll rect still needs a live check.

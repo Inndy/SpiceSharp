@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Spice.Wire\Spice.Wire.csproj" />
+    <ProjectReference Include="..\Spice.Native\Spice.Native.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- LZ4 row conversion is tested without the native decoder. -->
+    <InternalsVisibleTo Include="Spice.Replay.Tests" />
+  </ItemGroup>
+</Project>

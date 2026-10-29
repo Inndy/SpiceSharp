@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Spice.Session/Spice.Session.csproj" />
+    <!-- The test LZ4 encoder and the attributes that skip native LZ4 tests on a spicecodec.dll without sc_lz4_decode. -->
+    <Compile Include="../Spice.Native.Tests/Lz4TestEncoder.cs" Link="Shared/Lz4TestEncoder.cs" />
+  </ItemGroup>
+  <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
+</Project>

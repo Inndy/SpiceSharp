@@ -1,0 +1,19 @@
+{
+  "channels": [
+    "cursor:0",
+    "display:0",
+    "inputs:0",
+    "main:0"
+  ],
+  "width": 1024,
+  "height": 768,
+  "durationSeconds": 16.0056958,
+  "stats": {
+    "surface_create": 1,
+    "copy": 863,
+    "image_LzRgb": 1,
+    "image_GlzRgb": 861,
+    "image_Quic": 1
+  },
+  "errors": 0
+}

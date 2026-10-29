@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>spice-cli</AssemblyName>
+    <RootNamespace>SpiceCli</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Spice.Session\Spice.Session.csproj" />
+  </ItemGroup>
+  <Import Project="..\..\native\NativeDlls.targets" Condition="Exists('..\..\native\NativeDlls.targets')" />
+</Project>

@@ -1,0 +1,90 @@
+SpiceViewer {VERSION} (portable, {RID})
+=====================================
+
+A native Windows viewer for Proxmox SPICE connection files (.vv).
+
+Requirements: Windows 10 1809 or later (Windows 11 recommended) on an x64 CPU with AVX2
+(x86-64-v3: Intel Haswell or AMD Excavator/Zen and newer). No .NET runtime needed.
+
+Usage
+-----
+  SpiceViewer.exe path\to\file.vv     open a connection file
+  SpiceViewer.exe --register          make this copy the handler for .vv files (current user only)
+  SpiceViewer.exe --unregister        undo --register
+  SpiceViewer.exe --install           optional: install for the current user (see below)
+  SpiceViewer.exe --uninstall         remove that installation
+  SpiceViewer.exe --debug file.vv     verbose log
+
+Proxmox connection files expire about 30-60 seconds after download; open them right away.
+If the file has "delete-this-file=1" it is deleted once read.
+
+Settings and log
+----------------
+SpiceViewer is portable: it keeps its settings (settings.json) and log (viewer.log) in a "data"
+folder next to SpiceViewer.exe, created on first run. If that folder can't be written (for
+example under Program Files), it uses %APPDATA%\SpiceViewer for settings and
+%LOCALAPPDATA%\SpiceViewer for the log instead. Passwords are never logged.
+
+The window's size, position, maximized/full-screen state and scaling are remembered per VM
+(by proxy or host plus the .vv title; files without a title are not remembered). The other
+window-menu settings apply to all VMs. Delete settings.json to start over.
+
+Installing (optional)
+---------------------
+"SpiceViewer.exe --install" copies the program to %LOCALAPPDATA%\Programs\SpiceViewer,
+copies this copy's settings to %APPDATA%\SpiceViewer (unless settings already exist there),
+and makes the installed copy the handler for .vv files. No administrator rights are needed and
+no Start-menu shortcut is created. The installed copy keeps its settings in
+%APPDATA%\SpiceViewer and its log in %LOCALAPPDATA%\SpiceViewer.
+"SpiceViewer.exe --uninstall" removes the .vv association and the installed program, and
+leaves your settings and log in place.
+
+Keys (defaults; a .vv file may override them)
+---------------------------------------------
+  Ctrl+Alt+R   release keyboard and mouse back to Windows (click the window to capture again)
+  Shift+F11    toggle full screen
+  The window menu (right-click the title bar) has Send Ctrl+Alt+Del, Send Win+L,
+  scaling (fit / 1:1), when to capture system shortcuts, resize guest to window,
+  "Show guest cursor in server mouse mode", "Video pacing", "Fast JPEG decoding",
+  "Image compression", and About.
+
+Video pacing (window menu, saved for all VMs): how guest video streams are timed.
+  Smooth bursts (default)  frames keep their spacing, at most 50 ms of added delay.
+  Follow guest clock       frames wait for the guest's timestamps, as spice-gtk does;
+                           video may then run about 0.4 s late and behind its sound.
+  Off                      every frame is drawn as soon as it arrives.
+
+Fast JPEG decoding (window menu, saved for all VMs, off by default): decodes JPEG images
+  and video about 12% faster at slightly lower quality: colours are a little less accurate,
+  most visibly on sharp coloured edges. Takes effect at once.
+
+Image compression (window menu, saved for all VMs):
+  Server default (default)    the server picks how screen images are compressed.
+  LZ4 (fast, more bandwidth)  asks the server for LZ4: quicker to decode, but uses more
+                              network bandwidth; best on a fast local network. Sent at once
+                              if the server supports it; going back to "Server default"
+                              takes effect from the next connection.
+
+Guest tools
+-----------
+Install spice-guest-tools (https://www.spice-space.org/download.html) in Windows guests for
+smooth client-mode mouse, clipboard sharing and resize-to-window. Without them the viewer uses
+server mouse mode: the pointer is confined to the window and shows the guest's cursor (or is
+hidden, with "Show guest cursor in server mouse mode" turned off in the window menu).
+
+Security
+--------
+The server certificate is checked only against the CA and host-subject in the .vv file.
+The system trust store and hostname checks are never used as a fallback.
+
+Files
+-----
+  SpiceViewer.exe            the viewer (MIT)
+  spicecodec.dll             SPICE QUIC/LZ/GLZ decoders (LGPL-2.1-or-later) and the LZ4 decoder
+                             (BSD-2-Clause). You may replace it with your own build; its full source and
+                             build scripts are in source\native.
+  turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
+  opus.dll                   libopus (BSD-3-Clause)
+  LICENSE.txt                licenses of this program and of every component in this package
+  source\native\             complete source and build scripts of the native DLLs
+  data\                      settings.json and viewer.log (created on first run)
