@@ -8,3 +8,4 @@ are not repeated here; link them instead.
 |---|---|
 | [2026-10-29-live.md](2026-10-29-live.md) | M3 presentation (ETW present modes), M5 agent (clipboard, resize, mouse modes), M7 audio and MJPEG, settings and install round trip, allocation profiling |
 | [2026-10-30-gstreamer-encoders.md](2026-10-30-gstreamer-encoders.md) | Whether the node's spice-server encodes H.264, VP8 and VP9 through GStreamer (`spice-cli streams`) |
+| [2026-10-30-live-options.md](2026-10-30-live-options.md) | The viewer options on the AOT zip: LZ4 images, video pacing modes and run-time switches, fast JPEG, minimize/restore presents, resize, audio underruns |
