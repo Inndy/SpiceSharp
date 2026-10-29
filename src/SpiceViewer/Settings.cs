@@ -41,17 +41,17 @@ sealed class VideoPacingModeConverter : JsonConverter<VideoPacingMode>
 {
     public override VideoPacingMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        if (reader.TokenType != JsonTokenType.String) { reader.Skip(); return VideoPacingMode.Spacing; }
+        if (reader.TokenType != JsonTokenType.String) { reader.Skip(); return VideoPacingMode.Off; }
         return reader.GetString()?.Trim().ToLowerInvariant() switch
         {
+            "spacing" => VideoPacingMode.Spacing,
             "clock" => VideoPacingMode.Clock,
-            "off" => VideoPacingMode.Off,
-            _ => VideoPacingMode.Spacing,
+            _ => VideoPacingMode.Off,
         };
     }
 
     public override void Write(Utf8JsonWriter writer, VideoPacingMode value, JsonSerializerOptions options) =>
-        writer.WriteStringValue(value switch { VideoPacingMode.Clock => "clock", VideoPacingMode.Off => "off", _ => "spacing" });
+        writer.WriteStringValue(value switch { VideoPacingMode.Spacing => "spacing", VideoPacingMode.Clock => "clock", _ => "off" });
 }
 
 /// <summary>
@@ -112,7 +112,7 @@ sealed class ViewerSettings
     public ShortcutMode SystemShortcuts { get; set; } = ShortcutMode.Always;
     public bool ResizeGuest { get; set; } = true;
     [JsonConverter(typeof(VideoPacingModeConverter))]
-    public VideoPacingMode VideoPacing { get; set; } = VideoPacingMode.Spacing;
+    public VideoPacingMode VideoPacing { get; set; } = VideoPacingMode.Off;
     /// <summary>Fast JPEG decoding, slightly lower quality (docs/decisions/0028). Off keeps the accurate decoder.</summary>
     [JsonConverter(typeof(OffByDefaultConverter))]
     public bool FastJpeg { get; set; }
@@ -307,7 +307,7 @@ sealed class SettingsStore(string directory)
         if (!Enum.IsDefined(s.ServerCursor)) s.ServerCursor = ServerCursorMode.Guest;
         if (!Enum.IsDefined(s.Scaling)) s.Scaling = ScalingMode.Fit;
         if (!Enum.IsDefined(s.SystemShortcuts)) s.SystemShortcuts = ShortcutMode.Always;
-        if (!Enum.IsDefined(s.VideoPacing)) s.VideoPacing = VideoPacingMode.Spacing;
+        if (!Enum.IsDefined(s.VideoPacing)) s.VideoPacing = VideoPacingMode.Off;
         if (!Enum.IsDefined(s.ImageCompression)) s.ImageCompression = ImageCompressionMode.Auto;
         var vms = new Dictionary<string, VmWindowState>(StringComparer.Ordinal);
         if (s.Vms is not null)

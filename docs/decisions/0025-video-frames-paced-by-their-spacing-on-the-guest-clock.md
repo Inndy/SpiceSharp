@@ -1,6 +1,7 @@
-# 0025. Video pacing is a setting: by default frames keep their spacing on the guest clock
+# 0025. Video pacing is a setting; by default frames are drawn on arrival
 
-- Status: Proposed (needs the human's review: it reads the spec's "as SpiceSee does" for the early-frame case)
+- Status: Accepted (the human, 2026-10-30: default `off`, for the best performance and the lowest latency; the
+  user can switch to a mode that follows the guest clock)
 - Date: 2026-10-30
 - Decided by: agent, from Codex's review finding that MJPEG frames were drawn on arrival; the three modes as a
   setting by the human (2026-10-30)
@@ -21,14 +22,15 @@
   window drags, about 400 ms late and that far behind its sound.
 - **Decision** (`src/Spice.Session/SessionDisplay.cs`): `SpiceSession.VideoPacing` selects one of three modes; it
   can change while a session runs. The viewer's global `videoPacing` setting (`spacing`, `clock`, `off`; anything
-  else reads as `spacing`) and the window menu's "Video pacing" submenu set it (see 0024).
-  - **`spacing` (default)**, as described in the rest of this list.
+  else reads as `off`) and the window menu's "Video pacing" submenu set it (see 0024).
+  - **`off` (default)**: every frame is decoded and drawn on arrival: no queue, no wake, no drops (the behaviour
+    before pacing). The human chose it as the default (2026-10-30) for the best performance and lowest latency.
+  - **`spacing`**, as described in the rest of this list.
   - **`clock`**: spice-gtk's pacing. Each frame waits until the guest clock reaches its timestamp (at most 2 s, against
     a clock far off the stamps); a frame already behind the clock on arrival is dropped before decode (0 ms
     tolerance, as spice-gtk drops a late MJPEG frame). A new clock base from MAIN_MULTI_MEDIA_TIME reschedules the
     queued frames. Until our audio honours PLAYBACK_LATENCY this puts video behind its sound by the server's clock lead
     (the unverified ~400 ms above), and adds that delay to everything streamed.
-  - **`off`**: every frame is decoded and drawn on arrival: no queue, no wake, no drops (the behaviour before pacing).
   - **Switching** reschedules queued frames at once under the new mode, keeping deadlines non-decreasing: `off` makes
     them all due (the newest is drawn, older ones are dropped as superseded), `clock` moves them to their timestamps,
     `spacing` caps them at 50 ms from now. If nothing remains queued the wake is cancelled.
@@ -63,8 +65,8 @@
     STREAM_DESTROY (sent before the server redraws the area) discards it.
   - Tests replace the clock (`SpiceSession.PacingClock`, internal) with a manual one; replays that never advance time
     stay deterministic, and sessions without MAIN_INIT draw on arrival as before.
-- **Reason:** the default keeps SpiceSee's latency (and our audio/video alignment) while removing the bunching the
-  review found and the decodes it wasted. `clock` is there for comparison and for when audio honours PLAYBACK_LATENCY
-  (then it should give lip sync); until then it trades bunched frames for a fixed lag. `off` is the escape hatch if
-  pacing ever misbehaves with a server. Costs: jitter longer than 50 ms is only partly smoothed; frames are not synchronized with audio
+- **Reason:** `off` has the lowest latency and does the least work per frame, which the principles rank first; a
+  burst may overwrite a frame before it is presented, wasting its decode. `spacing`
+  removes that bunching for at most 50 ms of delay. `clock` is there for A/V sync: once audio honours
+  PLAYBACK_LATENCY it should give lip sync; until then it trades bunched frames for a fixed lag behind the sound. Costs: jitter longer than 50 ms is only partly smoothed; frames are not synchronized with audio
   beyond both being shown on arrival; the stream report still sends 0 for last_frame_delay and audio_delay.

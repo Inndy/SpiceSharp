@@ -537,7 +537,7 @@ sealed unsafe partial class MainWindow
         uint k = _shortcuts switch { ShortcutMode.Always => IdKeysAlways, ShortcutMode.FullscreenOnly => IdKeysFullscreen, _ => IdKeysNever };
         PInvoke.CheckMenuRadioItem(_keysMenu, IdKeysAlways, IdKeysNever, k, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
         PInvoke.CheckMenuItem(_sysMenu, IdServerCursor, (uint)(_serverCursor == ServerCursorMode.Guest ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
-        uint p = _videoPacing switch { VideoPacingMode.Clock => IdPacingClock, VideoPacingMode.Off => IdPacingOff, _ => IdPacingSpacing };
+        uint p = _videoPacing switch { VideoPacingMode.Spacing => IdPacingSpacing, VideoPacingMode.Clock => IdPacingClock, _ => IdPacingOff };
         PInvoke.CheckMenuRadioItem(_pacingMenu, IdPacingSpacing, IdPacingOff, p, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
         PInvoke.CheckMenuItem(_sysMenu, IdFastJpeg, (uint)(_fastJpeg ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
         uint c = _imageCompression == ImageCompressionMode.Lz4 ? IdCompressionLz4 : IdCompressionAuto;

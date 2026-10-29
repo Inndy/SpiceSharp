@@ -84,10 +84,10 @@ public sealed partial class SpiceSession
     long _wakeAt, _queuedBytes, _pooledBytes;
     readonly byte[]?[] _framePool = new byte[]?[MaxPooledBuffers];
     int _framePoolCount;
-    VideoPacing _videoPacing = VideoPacing.Spacing;
+    VideoPacing _videoPacing = VideoPacing.Off;
 
     /// <summary>
-    /// How video-stream frames are timed (default <see cref="VideoPacing.Spacing"/>). May change at any time, from any
+    /// How video-stream frames are timed (default <see cref="VideoPacing.Off"/>). May change at any time, from any
     /// thread: frames already queued are rescheduled under the new mode at once (under <see cref="VideoPacing.Off"/>
     /// they are all due, so the newest is drawn and the older ones are dropped).
     /// </summary>

@@ -49,10 +49,11 @@ Keys (defaults; a .vv file may override them)
   "Image compression", and About.
 
 Video pacing (window menu, saved for all VMs): how guest video streams are timed.
-  Smooth bursts (default)  frames keep their spacing, at most 50 ms of added delay.
+  Off (default)            every frame is drawn as soon as it arrives: the lowest latency
+                           and the least work.
+  Smooth bursts            frames keep their spacing, at most 50 ms of added delay.
   Follow guest clock       frames wait for the guest's timestamps, as spice-gtk does;
                            video may then run about 0.4 s late and behind its sound.
-  Off                      every frame is drawn as soon as it arrives.
 
 Fast JPEG decoding (window menu, saved for all VMs, off by default): decodes JPEG images
   and video about 12% faster at slightly lower quality: colours are a little less accurate,

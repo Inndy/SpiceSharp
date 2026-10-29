@@ -9,12 +9,12 @@ public sealed class VideoPacingSettingsTests
         => SettingsStore.Parse(Encoding.UTF8.GetBytes(json), out var problem) ?? throw new InvalidOperationException(problem);
 
     [Fact]
-    public void DefaultIsSpacingAndIsWrittenAsAString()
+    public void DefaultIsOffAndIsWrittenAsAString()
     {
         var s = new ViewerSettings();
-        Assert.Equal(VideoPacingMode.Spacing, s.VideoPacing);
-        Assert.Contains("\"videoPacing\": \"spacing\"", Encoding.UTF8.GetString(SettingsStore.Serialize(s)));
-        Assert.Equal(VideoPacingMode.Spacing, Parse("{\"version\": 1}").VideoPacing);
+        Assert.Equal(VideoPacingMode.Off, s.VideoPacing);
+        Assert.Contains("\"videoPacing\": \"off\"", Encoding.UTF8.GetString(SettingsStore.Serialize(s)));
+        Assert.Equal(VideoPacingMode.Off, Parse("{\"version\": 1}").VideoPacing);
     }
 
     [Theory]
@@ -34,13 +34,13 @@ public sealed class VideoPacingSettingsTests
     [Theory]
     [InlineData("\"Clock\"", 1)]
     [InlineData("\" off \"", 2)]
-    [InlineData("\"absolute\"", 0)]
-    [InlineData("\"\"", 0)]
-    [InlineData("2", 0)]
-    [InlineData("null", 0)]
-    [InlineData("true", 0)]
-    [InlineData("[\"clock\"]", 0)]
-    [InlineData("{\"mode\": \"clock\"}", 0)]
+    [InlineData("\"absolute\"", 2)]
+    [InlineData("\"\"", 2)]
+    [InlineData("2", 2)]
+    [InlineData("null", 2)]
+    [InlineData("true", 2)]
+    [InlineData("[\"clock\"]", 2)]
+    [InlineData("{\"mode\": \"clock\"}", 2)]
     public void BadOrOddValuesFallBackWithoutLosingTheRestOfTheFile(string value, int expectedValue)
     {
         var expected = (VideoPacingMode)expectedValue;

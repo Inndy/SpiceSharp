@@ -18,7 +18,7 @@ sealed unsafe partial class MainWindow
     /// <summary>Null when the .vv has no title: nothing is remembered for this window.</summary>
     string? _vmKey;
     ServerCursorMode _serverCursor = ServerCursorMode.Guest;
-    VideoPacingMode _videoPacing = VideoPacingMode.Spacing;
+    VideoPacingMode _videoPacing = VideoPacingMode.Off;
     bool _fastJpeg;
     ImageCompressionMode _imageCompression = ImageCompressionMode.Auto;
     /// <summary>The window opened at a remembered rectangle, so the first frame doesn't resize or center it.</summary>
@@ -169,9 +169,9 @@ sealed unsafe partial class MainWindow
 
     static VideoPacing SessionPacing(VideoPacingMode mode) => mode switch
     {
+        VideoPacingMode.Spacing => VideoPacing.Spacing,
         VideoPacingMode.Clock => VideoPacing.Clock,
-        VideoPacingMode.Off => VideoPacing.Off,
-        _ => VideoPacing.Spacing,
+        _ => VideoPacing.Off,
     };
 
     /// <summary>A menu change: applies to the running session at once (its queued frames are rescheduled) and is saved.</summary>

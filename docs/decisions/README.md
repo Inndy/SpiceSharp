@@ -33,7 +33,7 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0022](0022-windows-10-22h2-best-effort-human-2026-10-29.md) | Windows 10 22H2: best effort (human, 2026-10-29) |
 | [0023](0023-per-vm-window-state-per-vm-keyed-by-proxy-host-title.md) | Per-VM window state: per VM, keyed by proxy/host + title |
 | [0024](0024-settings-portable-by-default-opt-in-install.md) | Settings: portable by default, opt-in install |
-| [0025](0025-video-frames-paced-by-their-spacing-on-the-guest-clock.md) | Video pacing is a setting: by default frames keep their spacing on the guest clock (proposed) |
+| [0025](0025-video-frames-paced-by-their-spacing-on-the-guest-clock.md) | Video pacing is a setting; by default frames are drawn on arrival |
 | [0026](0026-x64-builds-target-x86-64-v3.md) | x64 builds target x86-64-v3 (human, 2026-10-30) |
 | [0027](0027-native-dlls-trimmed-with-gc-sections-and-full-lto-lz4-decoder-in-spicecodec.md) | Native DLLs trimmed with gc-sections and full LTO; LZ4 decoder in spicecodec.dll (human, 2026-10-30) |
 | [0028](0028-fast-jpeg-and-preferred-image-compression-are-settings-lz4-is-advertised.md) | Fast JPEG decoding and the preferred image compression are settings; LZ4 is advertised (human, 2026-10-30) |
