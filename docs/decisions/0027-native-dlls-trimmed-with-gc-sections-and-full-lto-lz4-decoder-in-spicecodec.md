@@ -45,8 +45,8 @@
     - `native/test/smoke.c` checks a three-block stream that only decodes across blocks, plus truncated, oversized,
       zero-length and corrupt input.
   - This departs from the technology table in [spec.md](../design/spec.md), which lists LZ4 as managed
-    (K4os.Compression.LZ4, "no extra native code"). The human chose the native decoder on 2026-10-30. The spec
-    text is left for the human to update.
+    (K4os.Compression.LZ4, "no extra native code"). The human chose the native decoder on 2026-10-30 and approved
+    updating the spec's table to match (2026-10-30).
   - Out of scope: advertising `SPICE_DISPLAY_CAP_LZ4_COMPRESSION`, which [0004](0004-lz4-is-not-advertised.md)
     declined, belongs to the managed side and is recorded in
     [0028](0028-fast-jpeg-and-preferred-image-compression-are-settings-lz4-is-advertised.md).

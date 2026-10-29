@@ -101,9 +101,9 @@ One C# solution compiled with Native AOT, native Windows APIs throughout, and a 
 | Win32 and COM bindings | CsWin32, marshaling disabled | One Microsoft-maintained generator for Win32, D3D11, DXGI and Media Foundation; works with Native AOT |
 | Presentation | Direct3D 11, DXGI flip model (`FLIP_SEQUENTIAL`), `Present1` with dirty and scroll rectangles, waitable swap chain | Bypasses desktop composition, partial recomposition, low latency, works on WARP |
 | Compositor | CPU, C# | SPICE draw commands are 2D: mostly copies, fills and scrolls |
-| SPICE image codecs (QUIC, LZ, GLZ) | `spicecodec.dll`, built from C vendored from spice-common and spice-gtk | No .NET implementation exists; the server defaults to GLZ |
+| SPICE image codecs (QUIC, LZ, GLZ, LZ4) | `spicecodec.dll`, built from C vendored from spice-common and spice-gtk, and lz4's `lib/lz4.c` | No .NET implementation of QUIC, LZ or GLZ exists; the server defaults to GLZ. LZ4 joins them: one native decoder DLL, no managed package |
 | JPEG and MJPEG | libjpeg-turbo (`turbojpeg.dll`) | Fast, and identical on every Windows edition |
-| zlib and LZ4 | .NET `ZLibStream`, K4os.Compression.LZ4 | Managed; no extra native code |
+| zlib | .NET `ZLibStream` | Managed; no extra native code |
 | Audio | libopus (`opus.dll`), WASAPI shared event-driven mode | Native output that can stop between playback |
 | TLS | .NET `SslStream` with custom trust | CA pinning and subject check from the `.vv` |
 | Keyboard and mouse | `WH_KEYBOARD_LL`, Raw Input, `ClipCursor` | System shortcuts reach the guest; relative mouse without an agent |
