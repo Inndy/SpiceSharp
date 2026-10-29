@@ -18,6 +18,47 @@ static class Commands
         return 0;
     }
 
+    /// <summary>
+    /// Advertises only the given video codecs (mjpeg, vp8, h264, vp9, h265) for a while and prints the streams the
+    /// server opens. A codec the server can't encode opens no stream; spice-server's codecs other than its built-in
+    /// MJPEG are GStreamer encoders, so a VP8/H.264/VP9/H.265 stream shows that GStreamer works on the host.
+    /// </summary>
+    public static async Task<int> Streams(VvConnection vv, string codecList, double seconds)
+    {
+        var caps = new List<int>();
+        foreach (string name in codecList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            caps.Add(name.ToLowerInvariant() switch
+            {
+                "mjpeg" => DisplayCap.CodecMjpeg, "vp8" => DisplayCap.CodecVp8, "h264" => DisplayCap.CodecH264,
+                "vp9" => DisplayCap.CodecVp9, "h265" => DisplayCap.CodecH265,
+                _ => throw new ArgumentException($"unknown codec {name}"),
+            });
+        }
+        var streams = new Dictionary<VideoCodecType, int>();
+        var lastSink = Log.Sink;
+        Log.Sink = (level, msg) =>
+        {
+            lastSink?.Invoke(level, msg);
+            // SessionDisplay logs each STREAM_CREATE with its codec.
+            if (!msg.StartsWith("display: stream ", StringComparison.Ordinal)) return;
+            foreach (var c in Enum.GetValues<VideoCodecType>())
+                if (msg.Contains($" {c} ", StringComparison.Ordinal) || msg.EndsWith($" {c}", StringComparison.Ordinal))
+                    lock (streams) streams[c] = streams.GetValueOrDefault(c) + 1;
+        };
+        await using var session = new SpiceSession(vv) { VideoCodecCapsOverride = caps };
+        await session.ConnectAsync(CancellationToken.None);
+        await Task.Delay(TimeSpan.FromSeconds(seconds));
+        Log.Sink = lastSink;
+        Console.WriteLine($"advertised: {codecList}");
+        lock (streams)
+        {
+            if (streams.Count == 0) Console.WriteLine("  no stream opened");
+            foreach (var (c, n) in streams) Console.WriteLine($"  {c}: {n} stream(s)");
+        }
+        return 0;
+    }
+
     /// <summary>Milestone 2: wait for the guest display, then write it to a PNG.</summary>
     public static async Task<int> Dump(VvConnection vv, string outPath, double seconds)
     {

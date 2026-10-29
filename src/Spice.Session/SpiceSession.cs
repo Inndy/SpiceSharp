@@ -109,7 +109,7 @@ public sealed partial class SpiceSession : IAsyncDisposable
             Log.Warn($"{id}: {codecError}; LZ images will not be drawn");
         var caps = id.Type switch
         {
-            ChannelType.Display => DisplayCaps(),
+            ChannelType.Display => DisplayCaps(VideoCodecCapsOverride),
             ChannelType.Inputs => new CapabilitySet(InputsCap.KeyScancode),
             ChannelType.Playback => new CapabilitySet(PlaybackCap.Volume, PlaybackCap.Latency, PlaybackCap.Opus),
             _ => new CapabilitySet(),
@@ -123,13 +123,21 @@ public sealed partial class SpiceSession : IAsyncDisposable
     /// The display channel's capabilities. LZ4 only with a spicecodec.dll that decodes it; spice-server sends LZ4 images
     /// only when its configuration or the client's preference (<see cref="PreferredCompression"/>) asks for LZ4.
     /// </summary>
-    internal static CapabilitySet DisplayCaps()
+    internal static CapabilitySet DisplayCaps(IReadOnlyList<int>? videoCodecs = null)
     {
         var caps = new CapabilitySet(DisplayCap.SizedStream, DisplayCap.MonitorsConfig, DisplayCap.MultiCodec,
-            DisplayCap.CodecMjpeg, DisplayCap.StreamReport);
+            DisplayCap.StreamReport);
+        if (videoCodecs is null) caps.Set(DisplayCap.CodecMjpeg);
+        else foreach (int c in videoCodecs) caps.Set(c);
         if (Lz4Decoder.IsAvailable) caps.Set(DisplayCap.Lz4Compression);
         return caps;
     }
+
+    /// <summary>
+    /// Diagnostics only (spice-cli): the video codec capabilities (<c>DisplayCap.Codec*</c>) to advertise instead of
+    /// MJPEG, to find out which encoders the server can use. Streams in codecs other than MJPEG are logged and dropped.
+    /// </summary>
+    public IReadOnlyList<int>? VideoCodecCapsOverride { get; init; }
 
     void Attach(SpiceChannel ch)
     {

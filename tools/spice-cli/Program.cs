@@ -12,7 +12,7 @@ static class Program
         if (args.Length >= 1 && args[0] is "-v") { Log.MinLevel = LogLevel.Debug; args = args[1..]; }
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("usage: spice-cli [-v] connect <file.vv>\n       spice-cli [-v] dump <file.vv> <out.png> [seconds]");
+            Console.Error.WriteLine("usage: spice-cli [-v] connect <file.vv>\n       spice-cli [-v] dump <file.vv> <out.png> [seconds]\n       spice-cli [-v] streams <file.vv> <codec,...> [seconds]");
             return 2;
         }
         try
@@ -23,6 +23,7 @@ static class Program
             {
                 "connect" => await Commands.Connect(vv),
                 "dump" when args.Length >= 3 => await Commands.Dump(vv, args[2], args.Length > 3 ? double.Parse(args[3]) : 3),
+                "streams" when args.Length >= 3 => await Commands.Streams(vv, args[2], args.Length > 3 ? double.Parse(args[3]) : 20),
                 _ => 2,
             };
         }
