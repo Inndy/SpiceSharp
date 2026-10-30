@@ -47,6 +47,10 @@ internal static unsafe partial class CodecApi
     [LibraryImport("spicecodec.dll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void sc_glz_window_destroy(nint h);
+    /// <summary>Frees the window's reuse pool; returns the bytes freed. Optional: a version-2 DLL may lack it.</summary>
+    [LibraryImport("spicecodec.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nuint sc_glz_window_trim(nint h);
     [LibraryImport("spicecodec.dll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial nint sc_glz_create(nint window);

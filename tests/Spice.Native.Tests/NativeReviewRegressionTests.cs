@@ -22,6 +22,28 @@ public sealed unsafe class NativeReviewRegressionTests
         Assert.Equal(new byte[] { 10, 20, 30, 255 }, output);
     }
 
+    // Finding K1 (docs/decisions/0041): trimming frees only retired images; the window keeps decoding.
+    [Fact]
+    public void GlzTrimPoolFreesRetiredImagesOnly()
+    {
+        using var window = new GlzWindow();
+        using var decoder = new GlzDecoder(window);
+        byte[] output = new byte[4];
+        Assert.Equal(0, window.TrimPool());
+
+        Assert.True(decoder.TryDecode(GlzLiteral(0), 1, 1, output, 4, out _));
+        Assert.Equal(0, window.TrimPool()); // image 0 is still in the window
+        // Image 1 has win_head_dist=0: image 0 is retired to the reuse pool.
+        Assert.True(decoder.TryDecode(GlzLiteral(1), 1, 1, output, 4, out _));
+        Assert.Equal(4, window.TrimPool()); // one 1x1 BGRA buffer
+        Assert.Equal(0, window.TrimPool());
+
+        Assert.True(decoder.TryDecode(GlzLiteral(2), 1, 1, output, 4, out _));
+        Assert.Equal(new byte[] { 10, 20, 30, 255 }, output);
+        window.Dispose();
+        Assert.Equal(0, window.TrimPool());
+    }
+
     [Fact]
     public void LzCAbiPreservesBytesBeyondAdvertisedVisibleOutput()
     {

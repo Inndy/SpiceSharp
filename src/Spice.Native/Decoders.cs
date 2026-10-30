@@ -106,6 +106,24 @@ public sealed class GlzWindow : IDisposable
     public void Clear() { lock (Gate) { if (!Closed) CodecApi.sc_glz_window_clear(Handle); } }
     public void Dispose() { lock (Gate) { Closed = true; DestroyIfUnused(); } GC.SuppressFinalize(this); }
     ~GlzWindow() { Dispose(); }
+
+    static bool s_noTrim;
+
+    /// <summary>
+    /// Frees the retired images the window keeps for reuse; the images later GLZ images may reference stay. Returns
+    /// the bytes freed: 0 when there were none, or when spicecodec.dll predates sc_glz_window_trim (it is optional, so
+    /// a replacement DLL of interface version 2 still works).
+    /// </summary>
+    public long TrimPool()
+    {
+        if (Volatile.Read(ref s_noTrim)) return 0;
+        lock (Gate)
+        {
+            if (Closed) return 0;
+            try { return (long)CodecApi.sc_glz_window_trim(Handle); }
+            catch (EntryPointNotFoundException) { Volatile.Write(ref s_noTrim, true); return 0; }
+        }
+    }
 }
 
 public sealed unsafe class GlzDecoder : IDisposable

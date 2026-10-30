@@ -445,7 +445,12 @@ sealed unsafe partial class MainWindow
     {
         bool minimized = kind == PInvoke.SIZE_MINIMIZED;
         _presenter?.SetSuspended(minimized);
-        if (minimized) return;
+        if (minimized)
+        {
+            // Nobody is watching: give back what the busy period left (docs/decisions/0041).
+            _session?.TrimMemory("minimized", force: true);
+            return;
+        }
         // The GDI-painted status (no presenter: "Connecting…", waiting, a failed display) is centred on the client
         // area: lay it out again (finding L10). With a presenter nothing is painted with GDI, so nothing is invalidated.
         if (_presenter is null) PInvoke.InvalidateRect(_hwnd, (RECT?)null, false);

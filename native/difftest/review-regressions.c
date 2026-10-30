@@ -186,12 +186,40 @@ static void glz_rotating_sizes(void)
     check(live_blocks == 0, "rotating-size scenario frees all storage");
 }
 
+/* Added 2026-10-31 with sc_glz_window_trim (finding K1 of docs/verification/2026-10-30-v0-dod.md). */
+static void glz_trim_pool(void)
+{
+    puts("K1: sc_glz_window_trim frees the reuse pool and keeps the window");
+    sc_glz_window *w = sc_glz_window_create(); sc_glz *g = sc_glz_create(w);
+    if (!w || !g) { check(0, "create GLZ window/decoder"); sc_glz_destroy(g); sc_glz_window_destroy(w); return; }
+    check(sc_glz_window_trim(w) == 0, "a fresh window has nothing to trim");
+    int ok = 1;
+    for (uint32_t id = 0; id < 20; id++)
+        if (glz_flat(g, 1024, 3 * (1u << (id % 10)) - 2, id, 0)) ok = 0;
+    check(ok, "warm-up frames decode correctly");
+    size_t before = live_bytes;
+    size_t freed = sc_glz_window_trim(w);
+    printf("  trimmed %zu bytes; %zu bytes still allocated\n", freed, live_bytes);
+    /* The reported bytes are pixel buffers; each pooled image also frees its small struct. */
+    check(freed > 0 && before - live_bytes >= freed && before - live_bytes - freed <= 32 * 256,
+          "the trim frees the pooled pixel bytes it reports, plus their image structs");
+    /* With whd=0 every image releases the ones before it, so the window holds only the last (1534 rows). */
+    check(live_bytes >= (size_t)1024 * 1534 * 4, "the window's current image stays");
+    check(sc_glz_window_trim(w) == 0, "a second trim finds nothing");
+    for (uint32_t id = 20; id < 30; id++)
+        if (glz_flat(g, 1024, 3 * (1u << (id % 10)) - 2, id, 0)) ok = 0;
+    check(ok, "decoding continues after the trim");
+    sc_glz_destroy(g); sc_glz_window_destroy(w);
+    check(live_blocks == 0, "trim scenario frees all storage");
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     glz_capacity_budget();
     lz_error_scratch();
     glz_rotating_sizes();
+    glz_trim_pool();
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? 1 : 0;
 }

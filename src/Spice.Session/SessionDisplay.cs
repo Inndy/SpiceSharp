@@ -225,6 +225,7 @@ public sealed partial class SpiceSession
             case DisplayMsg.StreamDestroy:
             {
                 uint id = new SpiceReader(m).U32();
+                bool lastEnded = false;
                 lock (_streamLock)
                 {
                     if (_streams.Remove(id, out var s))
@@ -238,20 +239,28 @@ public sealed partial class SpiceSession
                             Log.Info($"display: stream {id} ended after {s.EarlierFrames + s.Frames} frames, " +
                                 $"{s.EarlierDrops + s.Drops} dropped, {s.Hidden} hidden by its clip");
                             EndStream(s);
+                            lastEnded = _streams.Count == 0;
                         }
                     }
                 }
+                // The video is over: what its frames and decoding left behind can go (rate-limited, decision 0041).
+                if (lastEnded) TrimMemory("video ended");
                 break;
             }
             case DisplayMsg.StreamDestroyAll:
+            {
+                bool hadStreams;
                 lock (_streamLock)
                 {
+                    hadStreams = _streams.Count > 0;
                     foreach (var s in _streams.Values) { DiscardQueue(s); s.Frame?.Release(); s.Frame = null; }
                     _streams.Clear();
                     ClearFramePool();
                     UpdateWake();
                 }
+                if (hadStreams) TrimMemory("video ended");
                 break;
+            }
             case DisplayMsg.StreamActivateReport:
             {
                 var (sid, unique, window, _) = DisplayParse.StreamActivateReport(m);

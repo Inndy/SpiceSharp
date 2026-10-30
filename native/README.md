@@ -58,10 +58,11 @@ have not been run on ARM64 yet.
 ## ABI and binding decisions
 
 The spicecodec header retains all 17 reference functions and enum values,
-and adds an 18th, `sc_lz4_decode`. Only `SC_API` (`__declspec(dllexport)`) and
-`SC_CALL` (`__cdecl`) were added to the reference declarations.
+and adds an 18th, `sc_lz4_decode`, and `sc_glz_window_trim` (2026-10-31). Only `SC_API`
+(`__declspec(dllexport)`) and `SC_CALL` (`__cdecl`) were added to the reference declarations.
 No GLib is linked; the SpiceSee shim headers satisfy the upstream includes.
-The DLL exports only those 19 functions. `sc_abi_version` returns `SC_ABI_VERSION`
+The DLL exports only those 20 functions (with `sc_abi_version`). `sc_glz_window_trim` is optional: a
+version-2 DLL without it still works, and the viewer then has no GLZ reuse pool to trim (decision 0041). `sc_abi_version` returns `SC_ABI_VERSION`
 (2), raised whenever a function's contract changes; the viewer won't decode LZ with
 a DLL of another version (one without the function is version 1). Callers own the QUIC/LZ/LZ4 output
 buffers; GLZ output belongs to the window. One GLZ window must be shared by a
@@ -80,7 +81,8 @@ A GLZ window holds at most 128 MiB of image buffers, by capacity (twice
 what the advertised 32 MiB dictionary can make a well-behaved server keep); an
 image that would exceed it is rejected, and so is every later one until images
 are released or the window is cleared (review N1). Retired GLZ images are kept
-for reuse (at most 32 images, 32 MiB), so warmed-up decoding does not allocate.
+for reuse (at most 32 images, 32 MiB), so warmed-up decoding does not allocate;
+`sc_glz_window_trim` frees them (and only them) when the session goes idle.
 
 `sc_lz4_decode(src, src_len, dst, dst_cap)` takes SPICE LZ4 image data after
 its 2-byte header (top_down, SPICE bitmap format; the caller parses those):

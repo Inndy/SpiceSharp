@@ -82,7 +82,7 @@ public sealed class CoverageMask : IDisposable
         long bytes = (long)width * height;
         if (width < 0 || height < 0 || bytes > MaxBytes) throw new CanvasException($"bad mask size {width}x{height}");
         Width = width; Height = height; OriginX = originX; OriginY = originY;
-        Coverage = ArrayPool<byte>.Shared.Rent((int)Math.Max(1, bytes));
+        Coverage = PixelBuffers.Rent((int)Math.Max(1, bytes));
         Array.Clear(Coverage, 0, (int)bytes);
     }
 
@@ -98,7 +98,7 @@ public sealed class CoverageMask : IDisposable
     public void Dispose()
     {
         if (Coverage.Length == 0) return;
-        ArrayPool<byte>.Shared.Return(Coverage);
+        PixelBuffers.Return(Coverage);
         Coverage = [];
         var free = t_free ??= new Stack<CoverageMask>(MaxFreePerThread);
         if (free.Count < MaxFreePerThread) free.Push(this);

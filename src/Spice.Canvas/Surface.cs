@@ -1,4 +1,3 @@
-using System.Buffers;
 using Spice.Wire;
 
 namespace Spice.Canvas;
@@ -45,7 +44,7 @@ public readonly struct ImageView(byte[] pixels, int width, int height, int strid
 }
 
 /// <summary>
-/// A decoded image. Buffers come from <see cref="ArrayPool{T}"/>; the canvas returns temporary ones after each
+/// A decoded image. Buffers come from <see cref="PixelBuffers"/>; the canvas returns temporary ones after each
 /// command and keeps cached ones until the server invalidates them. Released objects go to a small per-thread free
 /// list that <see cref="Rent"/> reuses, so decoding a draw allocates nothing once warm; nothing may touch an image
 /// after its <see cref="Release"/>.
@@ -82,7 +81,7 @@ public sealed class DecodedImage
     {
         long bytes = ByteCount(width, height, maxBytes);
         Width = width; Height = height; HasAlpha = hasAlpha; IsCached = false;
-        Pixels = ArrayPool<byte>.Shared.Rent((int)Math.Max(4, bytes));
+        Pixels = PixelBuffers.Rent((int)Math.Max(4, bytes));
     }
 
     /// <summary>A temporary copy of a surface (already budgeted, so it may exceed <see cref="MaxBytes"/>).</summary>
@@ -116,7 +115,7 @@ public sealed class DecodedImage
     public void Release()
     {
         if (Pixels.Length == 0) return;
-        ArrayPool<byte>.Shared.Return(Pixels);
+        PixelBuffers.Return(Pixels);
         Pixels = [];
         var free = t_free ??= new Stack<DecodedImage>(MaxFreePerThread);
         if (free.Count < MaxFreePerThread) free.Push(this);

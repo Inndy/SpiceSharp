@@ -259,3 +259,19 @@ Speed (provisional numbers in decision 0029):
 Measured and not kept (no gain beyond noise): unchecked reads for LZ and GLZ literal runs whose bytes are all
 present. A 64-bit QUIC bit reader was not attempted: refills already happen once per 32 bits, and reading ahead
 would make truncated streams fail at different points.
+
+## SpiceSharp memory trim (2026-10-31)
+
+For finding K1 of `docs/verification/2026-10-30-v0-dod.md` ([../docs/decisions/0041](../docs/decisions/0041-idle-memory-is-trimmed-on-minimize-and-video-end.md)).
+The edit is marked `SPICESHARP MODIFICATION (2026-10-31)`, and the file's `MODIFIED FILE` notice has a dated
+2026-10-31 line. Origin and licence as above (spice-gtk commit `f04479c16f0969fb394ebe74b6eff74e560a42f0`,
+LGPL-2.1-or-later).
+
+- `spicecodec/vendor/decode-glz.c`: added `sc_glz_window_trim_pool()`, which frees the retired images kept for
+  reuse (N5 above) and returns their pixel bytes. The window's own images, which later GLZ images may reference,
+  are untouched. No decode path changed: the differential test (`difftest/run.sh --quick`) passed against the
+  previous commit.
+- `spicecodec/codec_bridge.c` and `spicecodec/include/spice_codec.h` (MIT wrapper, not vendored): export it as
+  `sc_glz_window_trim(window)`. It is optional: the interface version stays 2, and the viewer treats a DLL without
+  it as having nothing to trim. `difftest/review-regressions.c` checks the bytes freed, that the current image
+  stays and that decoding continues.

@@ -23,6 +23,7 @@
    SpiceSharp, 2026-10-30: a 128 MiB budget on the images the window holds; clearing the window also
      resets its oldest ID; failed slot-array, window and decoder allocations are handled; retired images
      and their pixel buffers are reused instead of freed; the budget counts each buffer's capacity.
+   SpiceSharp, 2026-10-31: sc_glz_window_trim_pool() frees the retired images kept for reuse.
    Each change is marked SPICESEE/SPICESHARP MODIFICATION below or listed in native/VENDORED.md. */
 #include "config.h"
 
@@ -177,6 +178,23 @@ static void sc_glz_retire(SpiceGlzDecoderWindow *w, struct glz_image *img)
     }
     w->pool[w->npool++] = img;
     w->pool_bytes += img->cap;
+}
+
+/* SPICESHARP MODIFICATION (2026-10-31): frees the retired images kept for reuse and returns their bytes. The
+   window's own images, which later GLZ images may reference, stay. */
+size_t sc_glz_window_trim_pool(SpiceGlzDecoderWindow *w)
+{
+    size_t freed = 0;
+    if (w == NULL)
+        return 0;
+    for (int i = 0; i < w->npool; i++) {
+        freed += w->pool[i]->cap;
+        glz_image_destroy(w->pool[i]);
+        w->pool[i] = NULL;
+    }
+    w->npool = 0;
+    w->pool_bytes = 0;
+    return freed;
 }
 
 /* SPICESEE MODIFICATION: upstream hands the decoded image back through the pixman surface it was

@@ -46,3 +46,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0035](0035-guest-display-off-takes-keys-and-the-monitor-area-is-shown.md) | A guest without a display says so and takes keys; the viewer shows the guest's monitor, not its whole surface |
 | [0036](0036-v1-terminal-bridge-to-the-users-terminal-first.md) | v1 terminal: bridge to the user's terminal first; byte-transparent console bridge, pipe hand-off, keep-alive policy (human, 2026-10-30) |
 | [0040](0040-viewers-sharing-a-data-folder-append-whole-lines-to-one-log.md) | Viewers sharing a data folder append whole lines to one viewer.log |
+| [0041](0041-idle-memory-is-trimmed-on-minimize-and-video-end.md) | Idle memory is trimmed when the window is minimized and when the last video stream ends (agent, spec silent, not yet reviewed) |

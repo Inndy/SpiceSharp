@@ -32,6 +32,8 @@ public sealed class ImageDecoder : IDisposable
     public bool FastJpeg { get => _jpeg.Fast; set => _jpeg.Fast = value; }
 
     public void ClearGlzWindow() => _glzWindow.Clear();
+    /// <summary>Frees the GLZ window's reuse pool (not the images the window holds). Returns the bytes freed.</summary>
+    public long TrimGlzPool() => _glzWindow.TrimPool();
     public void RemovePalette(ulong id) => _palettes.Remove(id);
     public void ClearPalettes() => _palettes.Clear();
 
@@ -73,14 +75,14 @@ public sealed class ImageDecoder : IDisposable
             case ImageType.ZlibGlzRgb:
             {
                 int size = (int)image.AuxSize;
-                var buf = ArrayPool<byte>.Shared.Rent(size + 1);
+                var buf = PixelBuffers.Rent(size + 1);
                 try
                 {
                     int n = Inflate(image.Data, buf.AsSpan(0, size + 1));
                     if (n != size) throw new CanvasException($"zlib-GLZ inflated {n} bytes, expected {size}");
                     return DecodeGlz(buf.AsSpan(0, size), w, h);
                 }
-                finally { ArrayPool<byte>.Shared.Return(buf); }
+                finally { PixelBuffers.Return(buf); }
             }
             case ImageType.Jpeg:
             {
@@ -153,14 +155,14 @@ public sealed class ImageDecoder : IDisposable
             }
             else
             {
-                scratch = ArrayPool<byte>.Shared.Rent(size);
+                scratch = PixelBuffers.Rent(size);
                 if (Lz4Decoder.Decode(data[2..], scratch.AsSpan(0, size)) != size) throw new CanvasException("corrupt LZ4 image");
                 ConvertRows(scratch.AsSpan(0, size), fmt, topDown, img);
             }
             return img;
         }
         catch { img.Release(); throw; }
-        finally { if (scratch is not null) ArrayPool<byte>.Shared.Return(scratch); }
+        finally { if (scratch is not null) PixelBuffers.Return(scratch); }
     }
 
     /// <summary>Bytes per pixel of an LZ4 image's format; 0 for a format LZ4 images can't carry.</summary>

@@ -101,6 +101,12 @@ public sealed class Canvas : IDisposable
     /// <summary>Fast JPEG decoding for JPEG and JPEG_ALPHA images (<see cref="ImageDecoder.FastJpeg"/>). Any thread.</summary>
     public bool FastJpeg { get => _decoder.FastJpeg; set => _decoder.FastJpeg = value; }
 
+    /// <summary>
+    /// Frees the GLZ window's reuse pool; the images later GLZ images may reference stay. Any thread (the window
+    /// serializes with decoding). Returns the bytes freed.
+    /// </summary>
+    public long TrimGlzPool() => _decoder.TrimGlzPool();
+
     void Count(string key) => Stats[key] = Stats.GetValueOrDefault(key) + 1;
 
     // Statistics keys built once, so counting a draw or an ignored message never formats a string.

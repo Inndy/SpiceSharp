@@ -16,6 +16,7 @@
 _Thread_local jmp_buf *sc_fatal_env;
 _Thread_local const uint8_t *sc_glz_input_end;
 extern void sc_glz_abort_pending(void);
+extern size_t sc_glz_window_trim_pool(SpiceGlzDecoderWindow *w);
 static uint32_t sc_be32(const uint8_t *p) { return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 static uint32_t sc_le32(const uint8_t *p) { return ((uint32_t)p[3]<<24)|((uint32_t)p[2]<<16)|((uint32_t)p[1]<<8)|p[0]; }
 static int sc_sizes(uint32_t w, uint32_t h) { return w && h && (uint64_t)w*h <= 67108864 && w <= 16777216; }
@@ -294,6 +295,7 @@ sc_glz_window *sc_glz_window_create(void)
 }
 
 void sc_glz_window_clear(sc_glz_window *w) { if (w) glz_decoder_window_clear(w->w); }
+size_t sc_glz_window_trim(sc_glz_window *w) { return w ? sc_glz_window_trim_pool(w->w) : 0; }
 void sc_glz_window_destroy(sc_glz_window *w) { if (w) { glz_decoder_window_destroy(w->w); free(w); } }
 
 sc_glz *sc_glz_create(sc_glz_window *w)

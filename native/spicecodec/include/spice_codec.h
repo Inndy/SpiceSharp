@@ -62,6 +62,9 @@ typedef struct sc_glz_window sc_glz_window;
 typedef struct sc_glz sc_glz;
 SC_API sc_glz_window *SC_CALL sc_glz_window_create(void);
 SC_API void           SC_CALL sc_glz_window_clear(sc_glz_window *);
+/* Frees the retired images the window keeps for reuse (at most 32 MiB) and returns their bytes. The images
+   the window holds for later references stay. Optional: a version-2 DLL may lack it. */
+SC_API size_t         SC_CALL sc_glz_window_trim(sc_glz_window *);
 SC_API void           SC_CALL sc_glz_window_destroy(sc_glz_window *);
 SC_API sc_glz  *SC_CALL sc_glz_create(sc_glz_window *);
 SC_API void     SC_CALL sc_glz_destroy(sc_glz *);
