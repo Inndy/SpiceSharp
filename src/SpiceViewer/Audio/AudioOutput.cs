@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Spice.Media;
 using Spice.Wire;
 using Windows.Win32;
@@ -18,32 +19,52 @@ namespace SpiceViewer;
 /// each WASAPI buffer event, writing silence on underflow, and tells the queue how much
 /// the device still holds.
 /// </para>
+/// <para>
+/// The stream outlives its device (docs/decisions/0031). The render thread attaches to the default device, and when
+/// the device fails or the default changes it detaches (<see cref="PcmQueue.Detach"/>) while the stream goes on, and
+/// reattaches when it can: at once after a default change (not a failure); after a failure, after a backoff of 50 ms
+/// doubling to 2 s, for 10 s from the first failure of a run (a run ends only once a device has played for 1 s);
+/// then only when a device notification, a same-format PLAYBACK_START, or the end of the stream wakes it (no
+/// timeout). Stop or a notification ends any wait at once.
+/// </para>
 /// All public members are thread-safe.
 /// </summary>
 sealed unsafe class AudioOutput : IDisposable
 {
     const int AUDCLNT_E_DEVICE_INVALIDATED = unchecked((int)0x88890004);
-    const int AUDCLNT_E_RESOURCES_INVALIDATED = unchecked((int)0x88890026);
     const int RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
     const int ErrorNoEvents = unchecked((int)0x800705B4); // HRESULT_FROM_WIN32(ERROR_TIMEOUT)
+    const int E_NOTFOUND = unchecked((int)0x80070490); // HRESULT_FROM_WIN32(ERROR_NOT_FOUND): no render endpoint
     const uint AUDCLNT_BUFFERFLAGS_SILENT = 2;
 
     const long DeviceBufferHns = 400_000; // 40 ms endpoint buffer (100 ns units)
     const int EventTimeoutMs = 2000;
-    const int MaxReopens = 3;
 
     static readonly Guid CLSID_MMDeviceEnumerator = new("BCDE0395-E52F-467C-8E3D-C4579291692E");
 
     enum Exit { Stop, DefaultChanged, Failed }
 
+    // Reattach backoff (docs/decisions/0031): fields rather than constants so tests can shorten them.
+    // healthyMs: how long a device must keep asking for buffers before a run of failures is over.
+    int retryFirstMs = 50, retryMaxMs = 2000, retryBudgetMs = 10_000, healthyMs = 1000;
+
     readonly Lock lifecycle = new();
     readonly ManualResetEvent stopEvent = new(false);
-    readonly AutoResetEvent bufferEvent = new(false), deviceChanged = new(false);
+    // deviceChanged: the default render device (console role) changed. devicesChanged: a device was added or became
+    // active, or a same-format START asks a detached stream to try again; only a detached wait listens to it.
+    readonly AutoResetEvent bufferEvent = new(false), deviceChanged = new(false), devicesChanged = new(false);
     Thread? thread;
     bool disposed;
 
     readonly PcmQueue queue = new();
     int channels, sampleRate; // set by Start while no render thread runs
+
+    // Render thread only, reset with each thread.
+    int failures;            // consecutive attaches that failed before playing healthyMs (default changes don't count)
+    long failingSince;       // TickCount64 at the first of them
+    int defaultNotifications, defaultIgnored; // default-device notifications, and those naming the device in use
+    /// <summary>The detached wait's timeout while it waits (ms; <see cref="Timeout.Infinite"/>: events only), else 0.</summary>
+    volatile int detachedWaitMs;
 
     volatile int gainQ16 = 65536;
     volatile bool muted;
@@ -59,15 +80,21 @@ sealed unsafe class AudioOutput : IDisposable
         lock (lifecycle)
         {
             if (disposed) return;
-            // A stream that ended is still playing out its held audio: continue it on the open device if the format
-            // matches; otherwise (or once it finished) restart (docs/decisions/0030).
-            if (thread is not null && queue.TryContinue(channels, sampleRate)) return;
+            // A stream that ended is still playing out its held audio, or a stream waits for a device: continue it if
+            // the format matches, and let a waiting render thread try the device again now; otherwise (or once it
+            // ended) restart (docs/decisions/0030, 0031).
+            if (thread is not null && queue.TryContinue(channels, sampleRate))
+            {
+                if (queue.IsDetached) devicesChanged.Set();
+                return;
+            }
             StopCore();
             this.channels = channels;
             this.sampleRate = sampleRate;
             queue.Reset(channels, sampleRate);
             stopEvent.Reset();
             deviceChanged.Reset();
+            devicesChanged.Reset();
             bufferEvent.Reset();
             thread = new Thread(RenderThread) { IsBackground = true, Name = "SpiceViewer audio", Priority = ThreadPriority.Highest };
             thread.Start();
@@ -89,8 +116,9 @@ sealed unsafe class AudioOutput : IDisposable
 
     /// <summary>
     /// The stream ended (PLAYBACK_STOP). Under clock pacing the audio still held back plays out to its deadline and the
-    /// render thread then closes the device on its own, from its buffer events (no timer); otherwise it closes now, as
-    /// <see cref="Stop"/> does. A <see cref="Start"/> meanwhile continues on the open device.
+    /// render thread then closes the device on its own, from its buffer events (no timer); otherwise, or while no device
+    /// is attached (nothing could be heard, docs/decisions/0031), it closes now, as <see cref="Stop"/> does. A
+    /// <see cref="Start"/> meanwhile continues on the open device.
     /// </summary>
     public void EndOfStream()
     {
@@ -121,6 +149,7 @@ sealed unsafe class AudioOutput : IDisposable
         stopEvent.Dispose();
         bufferEvent.Dispose();
         deviceChanged.Dispose();
+        devicesChanged.Dispose();
     }
 
     void StopCore()
@@ -148,12 +177,14 @@ sealed unsafe class AudioOutput : IDisposable
         IMMDeviceEnumerator* enumerator = null;
         DeviceNotifications.Native* notifications = null;
         bool registered = false;
+        failures = 0;
+        defaultNotifications = defaultIgnored = 0;
         try
         {
             Guid clsid = CLSID_MMDeviceEnumerator, iid = IMMDeviceEnumerator.IID_Guid;
             PInvoke.CoCreateInstance(&clsid, null, CLSCTX.CLSCTX_INPROC_SERVER, &iid, (void**)&enumerator).ThrowOnFailure();
 
-            notifications = DeviceNotifications.Create(deviceChanged);
+            notifications = DeviceNotifications.Create(deviceChanged, devicesChanged);
             try
             {
                 enumerator->RegisterEndpointNotificationCallback((IMMNotificationClient*)notifications);
@@ -161,26 +192,44 @@ sealed unsafe class AudioOutput : IDisposable
             }
             catch (Exception e) { Log.Debug($"Audio: device notifications unavailable (0x{e.HResult:X8})"); }
 
-            WaitHandle[] waits = [stopEvent, deviceChanged, bufferEvent];
-            int reopens = 0;
+            WaitHandle[] playing = [stopEvent, deviceChanged, bufferEvent];
+            WaitHandle[] detached = [stopEvent, deviceChanged, devicesChanged];
+            bool eventsOnly = false;
             while (true)
             {
-                long opened = Environment.TickCount64;
-                Exit exit = Play(enumerator, ch, rate, waits, out int error);
+                Exit exit = Play(enumerator, ch, rate, playing, out int error, out string? message);
                 if (exit == Exit.Stop || stopEvent.WaitOne(0)) break;
-                bool recoverable = exit == Exit.DefaultChanged
-                    || error is AUDCLNT_E_DEVICE_INVALIDATED or AUDCLNT_E_RESOURCES_INVALIDATED or ErrorNoEvents;
-                if (Environment.TickCount64 - opened > 5000) reopens = 0;
-                if (!recoverable || ++reopens > MaxReopens)
+                // The device is gone; the stream is not (docs/decisions/0031).
+                queue.Detach();
+                if (exit == Exit.DefaultChanged)
                 {
-                    Retire();
-                    Log.Warn("Audio: output closed; the next playback start reopens the default device");
-                    break;
+                    // Not a failure: the stream moves to the new default device at once.
+                    Log.Info("Audio: default output device changed; reopening");
+                    continue;
                 }
-                Log.Info(exit == Exit.DefaultChanged
-                    ? "Audio: default output device changed; reopening"
-                    : "Audio: output device lost; reopening on the default device");
-                queue.Unprime();
+                // A stream that ended can't play out without a device: it ends here instead (atomic with TryContinue).
+                if (queue.TryEndDetachedDrain()) break;
+                long now = Environment.TickCount64;
+                if (failures++ == 0)
+                {
+                    failingSince = now;
+                    eventsOnly = false;
+                    Log.Warn($"Audio: {Describe(error, message)}; playback goes on without output and the default "
+                        + "device is reopened when it can be");
+                }
+                bool retry = error != E_NOTFOUND && now - failingSince < retryBudgetMs;
+                // The last backoff ends at the budget, so the final attempt doesn't run past it.
+                int timeout = retry ? (int)Math.Min(Math.Min((long)retryFirstMs << Math.Min(failures - 1, 20), retryMaxMs),
+                    retryBudgetMs - (now - failingSince)) : Timeout.Infinite;
+                if (!retry && !eventsOnly)
+                {
+                    eventsOnly = true;
+                    Log.Warn("Audio: no output device can be opened; waiting for a device change or the next playback start");
+                }
+                detachedWaitMs = timeout;
+                int which = WaitHandle.WaitAny(detached, timeout);
+                detachedWaitMs = 0;
+                if (which == 0) break;
             }
         }
         catch (Exception e)
@@ -192,18 +241,32 @@ sealed unsafe class AudioOutput : IDisposable
         {
             if (registered) { try { enumerator->UnregisterEndpointNotificationCallback((IMMNotificationClient*)notifications); } catch { } }
             if (enumerator != null) enumerator->Release();
-            if (notifications != null) DeviceNotifications.ReleaseOwner(notifications);
+            if (notifications != null)
+            {
+                defaultNotifications = DeviceNotifications.DefaultChanges(notifications);
+                DeviceNotifications.ReleaseOwner(notifications);
+            }
             if (com.Value >= 0) PInvoke.CoUninitialize();
             Finish();
         }
     }
 
+    static string Describe(int error, string? message) => error switch
+    {
+        AUDCLNT_E_DEVICE_INVALIDATED => "output device was removed or reconfigured",
+        ErrorNoEvents => "no buffer events from the output device",
+        E_NOTFOUND => "no output device",
+        _ => $"output error: {message} (0x{error:X8})",
+    };
+
     /// <summary>
-    /// The worker has decided to exit (any path): it gives the queue up first, under the queue's lock, so from then on a
-    /// same-format <see cref="Start"/> fails <see cref="PcmQueue.TryContinue"/> and restarts (joining this worker)
-    /// instead of continuing onto it (review E4). The other exits already closed it: <see cref="StopCore"/> before
-    /// signalling stop, <see cref="PcmQueue.TryFinishDrain"/> at the end of a drain. A START that continued just before
-    /// the device failed loses that stream, as any stream does when its device fails.
+    /// The worker exits (any path): it gives the queue up first, under the queue's lock, so from then on a same-format
+    /// <see cref="Start"/> fails <see cref="PcmQueue.TryContinue"/> and restarts (joining this worker) instead of
+    /// continuing onto it (review E4). Most exits closed it already: <see cref="StopCore"/> before signalling stop,
+    /// <see cref="PcmQueue.TryFinishDrain"/> at the end of a drain, <see cref="PcmQueue.TryEndDetachedDrain"/> for a
+    /// drain without a device. A device failure no longer ends the stream (docs/decisions/0031); only a failure before
+    /// any device can be tried (COM or the device enumerator) does, and a START continuing in that window loses its
+    /// stream.
     /// </summary>
     void Retire() => queue.Close();
 
@@ -215,21 +278,57 @@ sealed unsafe class AudioOutput : IDisposable
         string sync = s.SyncCorrections == 0 && s.GapSilenceFrames == 0 && s.GapTrimmedFrames == 0 ? ""
             : $"; clock pacing made {s.SyncCorrections} corrections ({s.SyncSilenceFrames} frames of silence inserted, "
               + $"{s.SyncDroppedFrames} dropped), stamp gaps {s.GapSilenceFrames} frames of silence, {s.GapTrimmedFrames} cut";
+        string detached = s.Detaches == 0 ? ""
+            : $"; without a device {s.Detaches} times, {s.DetachedMs} ms, {s.ExpiredFrames} frames expired";
+        string notified = defaultNotifications == 0 && defaultIgnored == 0 ? ""
+            : $"; default device notifications {defaultNotifications}, {defaultIgnored} for the device in use";
         Log.Debug($"Audio: stream closed; underruns {s.Underruns}, dropped samples {s.DroppedSamples}, "
-            + $"discarded on close {s.DiscardedSamples}{sync}");
+            + $"discarded on close {s.DiscardedSamples}{sync}{detached}{notified}");
     }
 
-    /// <summary>Opens a stream on the current default device and pumps it until stop, device change or failure.</summary>
-    Exit Play(IMMDeviceEnumerator* enumerator, int ch, int rate, WaitHandle[] waits, out int error)
+    /// <summary>True if the default render device (console role) is still <paramref name="id"/>.</summary>
+    static bool IsDefault(IMMDeviceEnumerator* enumerator, char* id)
+    {
+        if (id == null) return false;
+        IMMDevice* device = null;
+        PWSTR current = default;
+        try
+        {
+            enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device);
+            device->GetId(&current);
+            return current.Value != null && MemoryMarshal.CreateReadOnlySpanFromNullTerminated(current.Value)
+                .SequenceEqual(MemoryMarshal.CreateReadOnlySpanFromNullTerminated(id));
+        }
+        catch { return false; }
+        finally
+        {
+            if (current.Value != null) Marshal.FreeCoTaskMem((nint)current.Value);
+            if (device != null) device->Release();
+        }
+    }
+
+    /// <summary>
+    /// Attaches to the current default device and pumps it until stop, the end of a drain, a default device change, or
+    /// failure. Logs only success; the caller logs failures, once per run of them. A device that keeps asking for
+    /// buffers for <see cref="healthyMs"/> after its first one ends a run of failures (<see cref="failures"/>).
+    /// </summary>
+    Exit Play(IMMDeviceEnumerator* enumerator, int ch, int rate, WaitHandle[] waits, out int error, out string? message)
     {
         IMMDevice* device = null;
         IAudioClient* client = null;
         IAudioRenderClient* render = null;
+        PWSTR id = default;
         bool started = false;
         error = 0;
+        message = null;
         try
         {
+            // Earlier notifications are answered by the device opened now: only later ones count (one default change
+            // can be announced more than once; a stale one would reopen the same device, live G5).
+            deviceChanged.Reset();
+            devicesChanged.Reset();
             enumerator->GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eConsole, &device);
+            try { device->GetId(&id); } catch { id = default; } // only to recognize repeated notifications
             Guid iid = IAudioClient.IID_Guid;
             device->Activate(&iid, CLSCTX.CLSCTX_INPROC_SERVER, null, (void**)&client);
 
@@ -260,32 +359,49 @@ sealed unsafe class AudioOutput : IDisposable
             Log.Info($"Audio: playing {ch} ch {rate} Hz s16, device buffer {bufferFrames * 1000 / (uint)rate} ms, "
                 + $"stream latency {latencyHns / 10_000} ms");
 
+            // The queue expires what played while detached and primes again (docs/decisions/0031).
+            queue.Attach();
             // Pre-roll: queued audio, or ~10 ms of silence. A drain can end here (the replaced device already played the
             // rest): then no client starts (review E3).
             if (Fill(client, render, bufferFrames, ch, latencyFrames)) return Exit.Stop;
             client->Start();
             started = true;
 
+            long firstBuffer = -1; // TickCount64 of the first buffer event while failures are counted
             while (true)
             {
                 int which = WaitHandle.WaitAny(waits, EventTimeoutMs);
                 if (which == 0) return Exit.Stop;
-                if (which == 1) return Exit.DefaultChanged;
+                if (which == 1)
+                {
+                    if (!IsDefault(enumerator, id.Value)) return Exit.DefaultChanged;
+                    defaultIgnored++; // announced again, or changed and changed back: the device in use is the default
+                    continue;
+                }
                 if (which == WaitHandle.WaitTimeout)
                 {
-                    Log.Warn("Audio: no buffer events from the device");
                     error = ErrorNoEvents;
                     return Exit.Failed;
                 }
                 if (Fill(client, render, bufferFrames, ch, latencyFrames)) return Exit.Stop; // drained after the stream ended
+                if (failures > 0)
+                {
+                    // A run of failures ends only once the device has played for healthyMs, judged from its buffer
+                    // events (no timer); a device that fails soon after its first buffer keeps counting.
+                    long now = Environment.TickCount64;
+                    if (firstBuffer < 0) firstBuffer = now;
+                    else if (now - firstBuffer >= healthyMs)
+                    {
+                        Log.Info($"Audio: output back after {now - failingSince} ms");
+                        failures = 0;
+                    }
+                }
             }
         }
         catch (Exception e)
         {
             error = e.HResult;
-            Log.Warn(error == AUDCLNT_E_DEVICE_INVALIDATED
-                ? "Audio: output device was removed or reconfigured"
-                : $"Audio: WASAPI error: {e.Message} (0x{error:X8})");
+            message = e.Message;
             return Exit.Failed;
         }
         finally
@@ -294,6 +410,7 @@ sealed unsafe class AudioOutput : IDisposable
             if (render != null) render->Release();
             if (client != null) client->Release();
             if (device != null) device->Release();
+            if (id.Value != null) Marshal.FreeCoTaskMem((nint)id.Value);
         }
     }
 

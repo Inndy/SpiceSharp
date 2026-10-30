@@ -122,7 +122,9 @@ public sealed class AudioOutputLifecycleReviewTests
             Assert.True(queue.Draining);
             Assert.True(Volatile.Read(ref AudioOutputFakeBackend.Padding) > 0);
 
-            // Default-device replacement while the last device-held tail drains. New endpoint starts empty.
+            // Default-device replacement while the last device-held tail drains. New endpoint starts empty. (The default
+            // really changes: a notification naming the device in use is ignored since docs/decisions/0031.)
+            Volatile.Write(ref AudioOutputFakeBackend.DefaultDevice, 1);
             Signal(audio, "deviceChanged");
             await AudioOutputFakeBackend.SecondOpen.Task.WaitAsync(TimeSpan.FromSeconds(5));
             retirement = Task.Run(() => worker.Join());
@@ -186,20 +188,24 @@ public sealed class AudioOutputLifecycleReviewTests
         }
     }
 
+    // Was StartDuringFailedWorkerRetirementCannotContinueOntoTheDyingWorker (review E4): a device failure ended the
+    // stream, so a START racing it had to restart instead of continuing onto the dying worker. Since
+    // docs/decisions/0031 the device detaches and the stream goes on: a START while the drain is detached continues on
+    // the same worker, which keeps the new stream's audio through a failed reopen and reattaches.
     [Fact]
-    public async Task StartDuringFailedWorkerRetirementCannotContinueOntoTheDyingWorker()
+    public async Task StartDuringADeviceFailureContinuesTheStreamOnTheSameWorker()
     {
         AudioOutputFakeBackend.Reset();
-        using var exitReached = new ManualResetEventSlim(false, 0);
-        using var allowExit = new ManualResetEventSlim(false, 0);
+        using var failureReached = new ManualResetEventSlim(false, 0);
+        using var allowWorker = new ManualResetEventSlim(false, 0);
         var savedSink = Log.Sink;
         var savedLevel = Log.MinLevel;
-        Log.MinLevel = LogLevel.Warn;
+        Log.MinLevel = LogLevel.Info;
         Log.Sink = (_, message) =>
         {
-            if (!message.StartsWith("Audio: output closed;", StringComparison.Ordinal)) return;
-            exitReached.Set(); // The real render loop has chosen to exit, before Finish closes the queue.
-            if (!allowExit.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Retiring worker was not released");
+            if (!message.StartsWith("Audio: default output device changed;", StringComparison.Ordinal)) return;
+            failureReached.Set(); // The real render loop has detached the draining stream, before it reopens.
+            if (!allowWorker.Wait(TimeSpan.FromSeconds(5))) throw new TimeoutException("Detached worker was not released");
         };
         using var audio = new AudioOutput();
         Task? start = null;
@@ -207,27 +213,31 @@ public sealed class AudioOutputLifecycleReviewTests
         {
             audio.Start(2, 48000);
             await AudioOutputFakeBackend.FirstStart.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var oldWorker = Field<Thread>(audio, "thread");
+            var worker = Field<Thread>(audio, "thread");
             var queue = Field<PcmQueue>(audio, "queue");
             audio.Write(Packet(111), 300);
             audio.EndOfStream();
-            Interlocked.Exchange(ref AudioOutputFakeBackend.FailNextPadding, 1);
-            Signal(audio, "bufferEvent");
-            Assert.True(exitReached.Wait(TimeSpan.FromSeconds(5)));
+            // The default changes during the drain and the new device fails to open once (a backoff, then it opens).
+            Volatile.Write(ref AudioOutputFakeBackend.OpenError, unchecked((int)0x80004005));
+            Volatile.Write(ref AudioOutputFakeBackend.FailOpens, 1);
+            Volatile.Write(ref AudioOutputFakeBackend.DefaultDevice, 1);
+            Signal(audio, "deviceChanged");
+            Assert.True(failureReached.Wait(TimeSpan.FromSeconds(5)));
 
             short[] next = Packet(222);
             start = Task.Run(() => { audio.Start(2, 48000); audio.Write(next, 300); });
-            // A correct Start may join the retiring worker. Do not require it to return while that worker is paused.
-            await Task.WhenAny(start, Task.Delay(100));
-            allowExit.Set();
-            await start.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(oldWorker.Join(TimeSpan.FromSeconds(5)));
-            Assert.True(queue.Count > 0, "The retiring worker closed the queue accepted by the new START");
+            await start.WaitAsync(TimeSpan.FromSeconds(5)); // continues: nothing to join
+            allowWorker.Set();
             await AudioOutputFakeBackend.SecondStart.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Same(worker, Field<Thread>(audio, "thread"));
+            Assert.True(worker.IsAlive);
+            Assert.False(queue.Draining);
+            Assert.True(queue.Count > 0, "The continued stream lost its audio");
+            Assert.Equal(2, Volatile.Read(ref AudioOutputFakeBackend.Opens));
         }
         finally
         {
-            allowExit.Set();
+            allowWorker.Set();
             if (start is not null) await start.WaitAsync(TimeSpan.FromSeconds(5));
             audio.Stop();
             Log.Sink = savedSink;

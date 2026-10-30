@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-30-audio-detach.md](2026-10-30-audio-detach.md) | Audio stream/device lifetime, detached expiry and reattach timing, retry energy policy, notification callbacks, and window-free regressions |
 | [2026-10-30-stream-tail.md](2026-10-30-stream-tail.md) | Stream-tail visibility/counting, destroy-time drawing and ordering, agent replies, and window-free regressions |
 | [2026-10-30-clock-av-sync.md](2026-10-30-clock-av-sync.md) | Clock-mode audio sync: coherent clock rebases, queued-audio retiming, device handoff, and window-free regressions |
 | [2026-10-30-pre-release-commits.md](2026-10-30-pre-release-commits.md) | The pre-release commits, later squashed into the initial commit; native LZ ABI/allocation, occlusion, pacing memory/reporting, and uncommitted-fix rechecks |

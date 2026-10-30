@@ -1,6 +1,7 @@
 # 0030. Clock pacing holds audio to the guest clock by packet timestamps
 
-- Status: Accepted (by the human, 2026-10-30, with the timing budget and the render worker exit limitation (E4) below)
+- Status: Accepted (by the human, 2026-10-30, with the timing budget and the render worker exit limitation (E4) below;
+  E4 superseded by [0031](0031-the-audio-stream-outlives-its-output-device.md))
 - Date: 2026-10-30
 - Decided by: the human ("A/V sync 做，clock 模式延遲音訊", 2026-10-30: do A/V sync, by delaying audio in `clock`
   mode); the mechanism by the agent (spec silent), revised after Codex's review
@@ -100,7 +101,9 @@
     continues while a terminal failure is in progress (between the failing WASAPI call and that close, which includes
     logging and releasing the client, so it has no fixed bound) loses that stream, as the playing stream does; the next
     START reopens the device. Accepted as a limitation (review, fifth round). No lock is taken by the
-    worker that `StopCore` holds while joining it.
+    worker that `StopCore` holds while joining it. *Superseded by [0031](0031-the-audio-stream-outlives-its-output-device.md):
+    a device failure no longer ends the stream, so such a START keeps it; the rule that every exit closes the queue
+    first still holds.*
   - The render thread hands audio to the device with `PcmQueue.Transfer`, which removes it from the ring and records
     the device's new depth under one lock, so a concurrent synchronized write sees each frame once (review A3). A fill
     that takes nothing from the queue publishes the device depth alone. Switching pacing off flushes the hold and bumps

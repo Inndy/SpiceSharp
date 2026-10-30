@@ -9,11 +9,16 @@ namespace Spice.Replay.Tests
     static unsafe class AudioOutputFakeBackend
     {
         internal static readonly IMMDeviceEnumerator* Enumerator = (IMMDeviceEnumerator*)NativeMemory.AllocZeroed(1);
-        internal static readonly IMMDevice* Device = (IMMDevice*)NativeMemory.AllocZeroed(1);
+        // Two endpoints; GetDefaultAudioEndpoint returns Devices[DefaultDevice], each with its own GetId.
+        internal static readonly IMMDevice*[] Devices =
+            [(IMMDevice*)NativeMemory.AllocZeroed(1), (IMMDevice*)NativeMemory.AllocZeroed(1)];
         internal static readonly IAudioClient* Client = (IAudioClient*)NativeMemory.AllocZeroed(1);
         internal static readonly IAudioRenderClient* Render = (IAudioRenderClient*)NativeMemory.AllocZeroed(1);
         internal static readonly byte* Buffer = (byte*)NativeMemory.AllocZeroed(1 << 20);
         internal static int Padding, Rate, Channels, Starts, Opens, FailNextPadding, LastReleasedFrames, LastReleasedFlags;
+        // Attempts: GetDefaultAudioEndpoint calls. NoDevice: it fails with E_NOTFOUND. FailOpens: that many next
+        // Activate calls fail with OpenError.
+        internal static int Attempts, DefaultDevice, NoDevice, FailOpens, OpenError;
         internal static Action? BeforeGetBuffer;
         internal static TaskCompletionSource<bool> FirstStart = Signal(), SecondStart = Signal(), SecondOpen = Signal();
         internal static TaskCompletionSource<bool>? NextWrite;
@@ -23,6 +28,7 @@ namespace Spice.Replay.Tests
         internal static void Reset()
         {
             Padding = Rate = Channels = Starts = Opens = FailNextPadding = 0;
+            Attempts = DefaultDevice = NoDevice = FailOpens = OpenError = 0;
             LastReleasedFrames = LastReleasedFlags = 0;
             BeforeGetBuffer = null;
             FirstStart = Signal(); SecondStart = Signal(); SecondOpen = Signal();
@@ -57,6 +63,21 @@ namespace Spice.Replay.Tests
             return (uint)Volatile.Read(ref Padding);
         }
 
+        internal static IMMDevice* DefaultEndpoint()
+        {
+            Interlocked.Increment(ref Attempts);
+            if (Volatile.Read(ref NoDevice) != 0) throw new COMException("no endpoint", unchecked((int)0x80070490));
+            return Devices[Volatile.Read(ref DefaultDevice)];
+        }
+
+        internal static void Activate()
+        {
+            if (Volatile.Read(ref FailOpens) > 0 && Interlocked.Decrement(ref FailOpens) >= 0)
+                throw new COMException("injected open failure", Volatile.Read(ref OpenError));
+        }
+
+        internal static char* Id(IMMDevice* device) => (char*)Marshal.StringToCoTaskMemUni(device == Devices[0] ? "dev0" : "dev1");
+
         internal static short[] CapturedSamples() => new ReadOnlySpan<short>(Buffer,
             Volatile.Read(ref LastReleasedFrames) * Channels).ToArray();
 
@@ -77,6 +98,11 @@ namespace Windows.Win32.Foundation
     {
         public nint Value;
         public static explicit operator HANDLE(nint value) => new() { Value = value };
+    }
+
+    unsafe struct PWSTR
+    {
+        public char* Value;
     }
 
     struct HRESULT
@@ -125,7 +151,7 @@ namespace Windows.Win32.Media.Audio
         public ushort nBlockAlign, wBitsPerSample, cbSize;
     }
 
-    struct IMMNotificationClient { }
+    struct IMMNotificationClient { public static readonly Guid IID_Guid = Guid.Empty; }
 
     unsafe struct IMMDeviceEnumerator
     {
@@ -133,14 +159,19 @@ namespace Windows.Win32.Media.Audio
         public void RegisterEndpointNotificationCallback(IMMNotificationClient* callback) { }
         public void UnregisterEndpointNotificationCallback(IMMNotificationClient* callback) { }
         public void GetDefaultAudioEndpoint(EDataFlow flow, ERole role, IMMDevice** device)
-            => *device = Spice.Replay.Tests.AudioOutputFakeBackend.Device;
+            => *device = Spice.Replay.Tests.AudioOutputFakeBackend.DefaultEndpoint();
         public void Release() { }
     }
 
     unsafe struct IMMDevice
     {
         public void Activate(Guid* iid, global::Windows.Win32.System.Com.CLSCTX flags, void* parameters, void** client)
-            => *client = Spice.Replay.Tests.AudioOutputFakeBackend.Client;
+        {
+            Spice.Replay.Tests.AudioOutputFakeBackend.Activate();
+            *client = Spice.Replay.Tests.AudioOutputFakeBackend.Client;
+        }
+        public void GetId(global::Windows.Win32.Foundation.PWSTR* id)
+            => id->Value = Spice.Replay.Tests.AudioOutputFakeBackend.Id((IMMDevice*)global::System.Runtime.CompilerServices.Unsafe.AsPointer(ref this));
         public void Release() { }
     }
 
@@ -171,16 +202,5 @@ namespace Windows.Win32.Media.Audio
         }
         public void ReleaseBuffer(uint frames, uint flags) => Spice.Replay.Tests.AudioOutputFakeBackend.Released(frames, flags);
         public void Release() { }
-    }
-}
-
-namespace SpiceViewer
-{
-    // Notifications are not part of these tests. The linked renderer only needs an owner token to register/release.
-    static unsafe class DeviceNotifications
-    {
-        internal struct Native { }
-        internal static Native* Create(EventWaitHandle changed) => (Native*)NativeMemory.AllocZeroed(1);
-        internal static void ReleaseOwner(Native* token) => NativeMemory.Free(token);
     }
 }

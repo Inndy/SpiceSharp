@@ -18,6 +18,7 @@
     <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
     <!-- Exercise the renderer's lifecycle with test-only fake COM types; no viewer project or real device is used. -->
     <Compile Include="../../src/SpiceViewer/Audio/AudioOutput.cs" Link="Audio/AudioOutputUnderTest.cs" />
+    <Compile Include="../../src/SpiceViewer/Audio/DeviceNotifications.cs" Link="Audio/DeviceNotificationsUnderTest.cs" />
   </ItemGroup>
   <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
 </Project>

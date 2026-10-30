@@ -180,6 +180,11 @@ pacing off, full gap layout, queue epoch; decision 0030 as revised). The viewer 
   5 s). A second change during the same stream ends it, and with `clock` pacing the held audio is discarded (counted
   in `discarded on close`). A single change, including one during the drain, is handled. The reopen limit predates
   0030; changes this close together were forced by the test.
+  Addressed by [decision 0031](../decisions/0031-the-audio-stream-outlives-its-output-device.md) (device failures and
+  changes no longer end the stream; repeated notifications are ignored). **Fixed; re-checked live** (2026-10-30, see
+  "Re-check: audio detach" below): two changes 0.7 s apart, five within 0.6 s and ten 0.7 s apart all kept their
+  stream, one reopen per change, `discarded on close 0`. The second notification came from the test helper's second
+  `SetDefaultEndpoint` call (J1).
 
 ### Not covered
 
@@ -187,3 +192,80 @@ pacing off, full gap layout, queue epoch; decision 0030 as revised). The viewer 
 - Underrun recovery in `clock` mode; a device change in the pre-roll of a reopened device exactly at the end of a drain
   (0030 E3) was not hit deliberately (the changes landed 0.2 s into drains).
 - Present-to-screen and speaker timing, real content, win81, drift beyond 150 s: as above.
+
+## Re-check: audio detach (decision 0031)
+
+Same host, guest and signal. Code: WIP commit `4e452d9`, kept under the tag `archive/audio-detach-wip` (decision
+[0031](../decisions/0031-the-audio-stream-outlives-its-output-device.md) as approved after the Codex re-review). The
+viewer runs used the Native AOT publish output of `pwsh tools/package.ps1` (the zip step stopped at the license texts,
+as the worktree has no `native/downloads`; the executable and DLLs are the published ones), with `--debug`; the probe
+drives `AudioOutput` from the Debug build of the same tree. Additions to the method:
+- Two render endpoints: **device A**, the host's default (a USB audio interface), and **device B**, a virtual render
+  endpoint nothing else uses. Loopback records both, on one clock, so a sound can be followed across a change.
+- A scratch helper sets the default for chosen roles (console `c`, multimedia `m`, communications `e`) through
+  `IPolicyConfig::SetDefaultEndpoint`, one call per role, at set times, then restores the original default for all
+  three roles and reads it back. "`cm`" is what the earlier runs did: two calls, console then multimedia.
+- Per-beep sounds of 2.5 s (period 4 s) put one change into each stream; 1 s sounds (period 3 s) put changes into the
+  drain; the continuous track (period 2 s) keeps one stream open for 40–56 s.
+- A device failure without touching any setting: a scratch program opens device B in exclusive mode (initialized, not
+  started) while the viewer plays on it, and releases it 22 s later.
+- "Gap" is the silence in loopback between the last sound on the old device and the first on the new one, where the
+  guest's sound was continuous.
+
+### Results
+
+| What | Run | Observed | Result |
+|---|---|---|---|
+| One change per stream, `clock` | viewer, 2.5 s sounds, one change 2.2 s into each of 7 streams: `cm` → B, `cm` → A, `c` → B, `c` → A, `m` → B, `m` → A, `e` → B | each stream went on: one `Audio: default output device changed; reopening` per `c`, `m` or `cm` change, none for `e`; no Warn; `discarded on close 0`; stream-closed line `without a device 1 times, 0 ms` or `16 ms`, `0 frames expired`, and **`default device notifications N, M for the device in use`: `cm` 2, 1 and 2, 0; `c` 1, 0 (twice); `m` 1, 0 (twice); `e` no notifications part (0)**. Sound continued on the new device: gaps 19 + 37 (J3), 48 and 78 ms to B, 100, 76 and 93 ms to A; each 2.5 s sound still ended on time (J2) | pass |
+| One change per stream, `off` | viewer, same sequence, changes 1.4 s in | same reopen and notification counts (`cm` 2, 1 and 2, 0; `c`, `m` 1, 0; `e` none); `underruns` 0–2 per changed stream (the new device starts empty), `discarded on close 960` as in any `off` stream; gaps 30, 34 and 24 ms to B, 104, 99 and 88 ms to A | pass |
+| Which role announces what | helper alone, readback after setting one role | setting **only multimedia** to B made the **console** default B too, and the reverse; setting only communications left console and multimedia on A | roles linked (J1) |
+| G5: 2 changes 0.7 s apart, then 5 in 0.6 s | viewer, continuous track, `clock`, `cm` changes at 8.0 / 8.7 s, then 16.0 / 16.15 / 16.3 / 16.45 / 16.6 s (ends on B), back to A at 26 s | **one stream for the whole run**: 8 reopens, `without a device 8 times, 47 ms, 0 frames expired; default device notifications 16, 3 for the device in use`, `discarded on close 0`, no Warn. Tones after the burst played on B, then on A after the last change, on the guest's 2 s grid (the grid moved +18 ms after one reattach and -12 ms after another, about one system tick). The tone in progress during the burst was heard in five pieces (52 + 117 + 100 + 111 + 49 ms) and still ended on time | pass (was: stream ended, 260–342 ms of held audio discarded) |
+| G5 as first seen | viewer, 1 s sounds every 3 s, `cm` changes every 0.7 s × 10 | streams with 2 changes each: `default device notifications 4, 0 for the device in use`, 2 reopens, `discarded on close 0`, no Warn; every stream played to its end | pass |
+| Change during the `clock` drain | viewer, 1 s sounds, `cm` change 1.24 and 1.33 s after `playing` (after STOP, ~0.4 s held) | reopened, the drain finished on the new device and the stream closed 0.11–0.16 s later, `discarded on close 0`, no Warn; heard: 810 ms on A then 147 ms on B (the sound ends 18 ms early), and 884 ms on B then 9 ms on A (A's start-up took the rest, J2) | pass |
+| | 4 changes 1.41–1.45 s after `playing` | reopened, and the drain ended in the new device's pre-roll: `playing` and `stream closed` in the same millisecond, no client started; the whole sound was heard on the old device (988 ms) | pass (0030 E3 seen live) |
+| | 6 changes 1.03–1.07 s after `playing` (STOP arriving about then) | reopened, the sound finished on the new device, closed 0.35–0.42 s later, `discarded on close 0` | pass |
+| Sync across reattaches, `clock` | probe, continuous track, `cm` → B at 21 s, → A at 39 s | sync error on A before: **+3.7 ± 5.2** (-6.5 .. +10.2, 8 flashes); on B: **+0.1 ± 4.3** (-6.3 .. +6.8, 9); on A after: **+5.8 ± 3.3** (0.0 .. +10.2, 9); the first tone after the change -1.1 ms; `clock pacing made 1 corrections` (the first only), `without a device 2 times, 0 ms` | pass (budget 40 ms) |
+| Steady sync, `clock` | probe, continuous, 40 s, two runs | run 2: **+6.3 ± 4.2** (-0.7 .. +17.2), 1 correction, heard - due 26.5 ± 4.7. Run 1: +16.6 ± 13.4 (-11.8 .. +33.0): +19 .. +33 for 30 s, then the drift gate dropped 30 ms (`1454 dropped`) and it stayed at -2 .. -12 (J4) | pass, about as before (-3.7 ± 5.0) |
+| Steady latency, `off` | probe, continuous, 30 s | arrival → heard 34.5 ms, sync error +26.7 ± 2.8, `underruns 0, dropped samples 0` | unaffected (was 31.4–37.2) |
+| Device failure (exclusive hold on the device in use) | viewer, continuous track on B, `clock`; B taken exclusively at 10 s for 22 s, `cm` → A at 42 s | at the failure one `Warn Audio: output device was removed or reconfigured; playback goes on without output ...`; no log line per retry; 10.02 s later one `Warn Audio: no output device can be opened; waiting for a device change ...`; after B was released nothing reopened (no notification), as 0031 says; the change to A reopened 6 ms later, `Info Audio: output back after 32968 ms` 1 s after that. One stream throughout: `without a device 2 times, 31984 ms, 1532544 frames expired` (31.9 s), `discarded on close 0`. Tones after the reattach on the same 2 s grid as before the failure, 32 s earlier | pass |
+| No render device at all (`E_NOTFOUND`) | — | not run: it needs every render endpoint disabled or removed, which changes device state beyond the default-device setting (and may need admin). The exclusive hold above exercised the failure, backoff and event-only wait instead | skipped |
+
+After every run the helper restored the default render device for all three roles and read it back unchanged; at the
+end the defaults matched the record taken before the first device-change run.
+
+### Findings
+
+- **J1: the double notification came from the test helper, not from Windows announcing one change twice.** Windows
+  keeps the console and multimedia roles linked: setting either one moves both (read back after setting only one), and
+  each `SetDefaultEndpoint` call announces a console-role change. The helper made two calls per change (console, then
+  multimedia), so the viewer got two notifications naming the same new device; a single-role call gives one, a
+  communications-only call none. The 0031 dedupe handles it: one reopen per change in every run. The second
+  notification shows as `N, 1 for the device in use` when it arrives after the reopen started, and is absorbed
+  (`N, 0`) when it arrives before the render thread clears the event. How many calls the Windows Sound settings make
+  per change was not tried.
+- **J2: each change leaves a 20–100 ms silence, mostly the new endpoint's start-up.** The viewer is without a device
+  0–16 ms per change, but loopback hears the new device 76–104 ms after a change to device A and 19–78 ms after one to
+  device B, in both pacing modes. Loopback on device A gets its first data 100–140 ms after the viewer opened it
+  (A was idle), so most of the gap is A starting. Under `clock` pacing the timeline is kept (the sound in progress ends
+  on time, later tones stay on the guest's grid within one system tick), so the gap is sound lost, not delayed;
+  0031 does not replay the old device's held audio. Whether the engine drops that audio or loopback just doesn't
+  capture an endpoint's first ~100 ms was not determined (no speaker measurement).
+- **J3: device B stalls about 36 ms soon after it starts.** Twice, 65 and 165 ms after B started, loopback on B has a
+  35–37 ms hole and the rest of the tone comes later by that much, while the viewer counted `underruns 0`. Device B's
+  behaviour, not the viewer's.
+- **J4: a fresh stream's placement in `clock` mode varies between runs.** Two 40 s runs with no device change started
+  at about +25 and about +6 ms (heard - due 32.0 vs 26.5 ms); in the first the 30 ms drift gate corrected it after
+  ~35 s. Same cause as G2 (the first correction doesn't see the opening device's start-up); within the budget and not
+  related to detaching (the first device of a stream is not detached while it opens).
+- **J5 (method): loopback on device A sometimes delivers an isolated 61–80 ms chunk of tone, flagged discontinuous,
+  0.4–1.3 s after the viewer left A** (no client rendering on A then). These were excluded from the gaps above; where
+  they come from was not determined.
+- Not measured: wakeups during the event-only wait (the log shows no retries; no CPU or context-switch trace was
+  taken).
+
+### Not covered
+
+- A real "no device" (`E_NOTFOUND`), a device unplugged or disabled: not done (device state changes; see above).
+- A same-format PLAYBACK_START waking an event-only wait (`TryContinue` while detached), and a STOP while detached:
+  covered by unit tests only.
+- Changes made from the Windows Sound settings rather than `IPolicyConfig`; win81.

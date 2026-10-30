@@ -4,10 +4,12 @@ namespace Spice.Media;
 /// <see cref="PcmQueue"/> counters since its last reset: samples dropped on overflow or trim; underruns; clock
 /// corrections of the held timeline (frames of silence placed before all held audio, frames of held audio or of a late
 /// packet dropped, and how many corrections); source gaps (frames of silence placed between packets, frames of
-/// overlapping packet starts cut); and samples still queued when the queue was closed.
+/// overlapping packet starts cut); samples still queued when the queue was closed; and, while no device was attached
+/// (docs/decisions/0031), how often and how long that was and the frames that expired meanwhile.
 /// </summary>
 public readonly record struct PcmQueueStatistics(long DroppedSamples, long Underruns, long SyncSilenceFrames,
-    long SyncDroppedFrames, long SyncCorrections, long GapSilenceFrames, long GapTrimmedFrames, long DiscardedSamples);
+    long SyncDroppedFrames, long SyncCorrections, long GapSilenceFrames, long GapTrimmedFrames, long DiscardedSamples,
+    long Detaches = 0, long DetachedMs = 0, long ExpiredFrames = 0);
 
 /// <summary>
 /// The jitter queue between the playback channel and the audio device: a ring of interleaved s16 PCM that the network
@@ -20,9 +22,28 @@ public readonly record struct PcmQueueStatistics(long DroppedSamples, long Under
 /// delay (clock pacing, docs/decisions/0030): the queue inserts silence or drops its oldest samples so that the packet
 /// is heard that many ms from now, counting the audio the device already holds (<see cref="DeviceQueuedFrames"/>).
 /// </para>
+/// <para>
+/// The queue is the stream: it lives from <see cref="Reset"/> to <see cref="Close"/> (or the end of a drain) whether
+/// or not a device consumes it (docs/decisions/0031). While the render thread has no device (<see cref="Detach"/> ..
+/// <see cref="Attach"/>), a virtual device plays in real time: first what the real device still held, then the queue
+/// from its head. Nothing wakes for it; the audio it would have played expires lazily, on each <see cref="Write"/> and
+/// on <see cref="Attach"/>, so on reattach the queue plays from "now" and synchronized audio stays on its stamps.
+/// Unsynchronized audio is also cut to <see cref="TrimToMs"/> once it exceeds <see cref="TrimAboveMs"/> while detached.
+/// </para>
 /// </summary>
 public sealed class PcmQueue
 {
+    /// <summary>Who consumes the queue: nobody yet (the stream's first device is opening), a device, or nobody.</summary>
+    enum Consumer : byte { Pending, Attached, Detached }
+
+    static readonly Func<long> SystemClock = static () => Environment.TickCount64;
+
+    /// <summary>A queue on the system's millisecond tick.</summary>
+    public PcmQueue() : this(null) { }
+
+    /// <summary>A queue whose detached expiry reads <paramref name="clockMs"/> (monotonic ms; tests pass a manual clock).</summary>
+    public PcmQueue(Func<long>? clockMs) => _clock = clockMs ?? SystemClock;
+
     /// <summary>The presentation delay of a packet that plays as soon as possible.</summary>
     public const int Unsynced = int.MinValue;
 
@@ -76,6 +97,15 @@ public sealed class PcmQueue
     long _droppedSamples, _underruns, _syncSilenceFrames, _syncDroppedFrames, _syncCorrections, _gapSilenceFrames,
         _gapTrimmedFrames, _discardedSamples;
 
+    readonly Func<long> _clock;
+    Consumer _consumer;
+    /// <summary>
+    /// Detached: when (clock ms), the frames the device held then (the virtual device plays them first), and the frames
+    /// the virtual device has taken from the queue since (including any it found missing, as a device plays silence).
+    /// </summary>
+    long _detachedAt, _detachedHeld, _detachedTaken;
+    long _detaches, _detachedMs, _expiredFrames;
+
     /// <summary>Empties the queue and opens it for <paramref name="channels"/> x <paramref name="sampleRate"/>.</summary>
     public void Reset(int channels, int sampleRate)
     {
@@ -96,9 +126,11 @@ public sealed class PcmQueue
             _stampLead = 0;
             _droppedSamples = _underruns = _syncSilenceFrames = _syncDroppedFrames = _syncCorrections = 0;
             _gapSilenceFrames = _gapTrimmedFrames = _discardedSamples = 0;
+            _detaches = _detachedMs = _expiredFrames = 0;
             _primed = _synced = _draining = _newTimeline = false;
             _protectedSamples = 0;
             _readyEpoch = _epoch;
+            _consumer = Consumer.Pending;
             _active = true;
         }
     }
@@ -109,30 +141,93 @@ public sealed class PcmQueue
     /// </summary>
     public void Close()
     {
-        lock (_lock)
-        {
-            _discardedSamples += _count;
-            _active = false;
-            _draining = _newTimeline = false;
-            _protectedSamples = 0;
-            _head = _count = 0;
-            _deviceFrames = 0;
-            _stampLead = 0;
-        }
+        lock (_lock) CloseCore();
     }
 
     /// <summary>
     /// The stream ended (PLAYBACK_STOP) while clock pacing holds its audio back: returns true if the held audio should
     /// play out before the device closes (live F1), false if the caller should close now (unsynchronized playback, as
-    /// before, or a closed queue). While draining, <see cref="ReadyFrames"/> needs no prime cushion, and
-    /// <see cref="TryFinishDrain"/> tells the render thread when everything has been played.
+    /// before, a closed queue, or no device attached: nothing could be heard, docs/decisions/0031). While draining,
+    /// <see cref="ReadyFrames"/> needs no prime cushion, and <see cref="TryFinishDrain"/> tells the render thread when
+    /// everything has been played.
     /// </summary>
     public bool BeginDrain()
     {
         lock (_lock)
         {
-            if (!_active || !_synced) return false;
+            if (!_active || !_synced || _consumer == Consumer.Detached) return false;
             _draining = true;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// The render thread lost its device (or could not open one): from now on a virtual device plays in real time, so
+    /// the audio it would have played expires lazily (see the class remarks). The stream goes on. Idempotent while
+    /// detached: the first detach keeps its time.
+    /// </summary>
+    public void Detach()
+    {
+        lock (_lock)
+        {
+            if (!_active || _consumer == Consumer.Detached) return;
+            _consumer = Consumer.Detached;
+            _detachedAt = _clock();
+            _detachedHeld = _deviceFrames;
+            _detachedTaken = 0;
+            _primed = false;
+            _detaches++;
+        }
+    }
+
+    /// <summary>
+    /// The render thread opened a device and is about to pre-roll it: expires what the virtual device would have played
+    /// meanwhile (if detached), then waits for the prime cushion again with nothing counted in the device.
+    /// </summary>
+    public void Attach()
+    {
+        lock (_lock)
+        {
+            if (_consumer == Consumer.Detached)
+            {
+                ExpireDetached();
+                _detachedMs += Math.Max(0, _clock() - _detachedAt);
+                if (_synced && _deviceFrames > 0 && _count > 0)
+                {
+                    // The virtual device hasn't finished the old device's audio yet, and the new device starts empty:
+                    // the rest becomes silence ahead of the queue, so what is held keeps its stamps (review H1; a
+                    // drain has no later packet to correct it). It belongs to the schedule of whatever is at the head,
+                    // so a continued stream's protected prefix grows with it. With nothing held there is nothing to
+                    // keep in place (the next packet is placed by its own deadline), and an empty drain still ends in
+                    // the pre-roll without starting a client (E3).
+                    int samples = _deviceFrames * _channels;
+                    EnsureCapacity(_count + samples);
+                    samples = Math.Min(samples, _ring.Length - _count);
+                    PrependSilence(samples);
+                    if (_protectedSamples > 0) _protectedSamples += samples;
+                }
+            }
+            _consumer = Consumer.Attached;
+            _primed = false;
+            _deviceFrames = 0;
+        }
+    }
+
+    /// <summary>True while the render thread has no device (between <see cref="Detach"/> and <see cref="Attach"/>).</summary>
+    public bool IsDetached { get { lock (_lock) return _active && _consumer == Consumer.Detached; } }
+
+    /// <summary>
+    /// The render thread, before it waits for a device: a drain (<see cref="BeginDrain"/>) can't be heard without one,
+    /// so the stream ends here (the queue closes, its samples counted as discarded) and returns true. Atomic with
+    /// <see cref="TryContinue"/>, so a new stream either continued the drain first (and keeps waiting for a device) or
+    /// finds the queue closed and restarts.
+    /// </summary>
+    public bool TryEndDetachedDrain()
+    {
+        lock (_lock)
+        {
+            if (!_active || !_draining || _consumer != Consumer.Detached) return false;
+            CloseCore();
             return true;
         }
     }
@@ -152,6 +247,7 @@ public sealed class PcmQueue
             if (!_draining || _count > 0 || devicePadding > 0) return false;
             _draining = false;
             _active = false;
+            _consumer = Consumer.Pending;
             _deviceFrames = 0;
             _stampLead = 0;
             return true;
@@ -159,16 +255,18 @@ public sealed class PcmQueue
     }
 
     /// <summary>
-    /// A new stream starts (PLAYBACK_START) while the previous one plays out: if the format is the same, the queue and
-    /// the device carry on, the held audio keeps its schedule and the new stream's first packet starts a new timeline
-    /// after it; returns true. Otherwise (not draining, the drain finished, or another format) returns false and the
+    /// A new stream starts (PLAYBACK_START) while the previous one plays out, or while it waits for a device
+    /// (detached, docs/decisions/0031): if the format is the same, the queue and the render thread carry on, the held
+    /// audio keeps its schedule and the new stream's first packet starts a new timeline after it; returns true.
+    /// Otherwise (an attached stream not draining, the stream already ended, or another format) returns false and the
     /// caller restarts the device and <see cref="Reset"/>s the queue.
     /// </summary>
     public bool TryContinue(int channels, int sampleRate)
     {
         lock (_lock)
         {
-            if (!_draining || !_active || channels != _channels || sampleRate != _rate) return false;
+            if (!_active || channels != _channels || sampleRate != _rate) return false;
+            if (!_draining && _consumer != Consumer.Detached) return false;
             _draining = false;
             _newTimeline = true;
             _protectedSamples = _count;
@@ -182,8 +280,12 @@ public sealed class PcmQueue
         get
         {
             lock (_lock)
+            {
+                long detachedMs = _detachedMs;
+                if (_active && _consumer == Consumer.Detached) detachedMs += Math.Max(0, _clock() - _detachedAt);
                 return new(_droppedSamples, _underruns, _syncSilenceFrames, _syncDroppedFrames, _syncCorrections,
-                    _gapSilenceFrames, _gapTrimmedFrames, _discardedSamples);
+                    _gapSilenceFrames, _gapTrimmedFrames, _discardedSamples, _detaches, detachedMs, _expiredFrames);
+            }
         }
     }
 
@@ -222,6 +324,7 @@ public sealed class PcmQueue
         lock (_lock)
         {
             if (!_active || interleavedPcm.IsEmpty) return 0;
+            ExpireDetached();
             int n = interleavedPcm.Length - interleavedPcm.Length % _channels;
             interleavedPcm = interleavedPcm[..n];
             if (delayMs == Unsynced)
@@ -246,6 +349,13 @@ public sealed class PcmQueue
                 }
                 DropOldest(_count + n - _baseLength);
                 Append(interleavedPcm);
+                if (_consumer == Consumer.Detached && _count > _trimAbove)
+                {
+                    // No device: keep only a small recent window, as ReadyFrames' trim would on reattach.
+                    int expired = _count - _trimTo;
+                    Discard(expired);
+                    _expiredFrames += expired / _channels;
+                }
                 return 0;
             }
 
@@ -415,13 +525,45 @@ public sealed class PcmQueue
         }
     }
 
-    /// <summary>The device was reopened: wait for the prime cushion again.</summary>
+    /// <summary>Waits for the prime cushion again with nothing counted in the device (<see cref="Attach"/> does this too).</summary>
     public void Unprime()
     {
         lock (_lock) { _primed = false; _deviceFrames = 0; }
     }
 
     // ---- under _lock ----
+
+    void CloseCore()
+    {
+        _discardedSamples += _count;
+        if (_active && _consumer == Consumer.Detached) _detachedMs += Math.Max(0, _clock() - _detachedAt);
+        _active = false;
+        _consumer = Consumer.Pending;
+        _draining = _newTimeline = false;
+        _protectedSamples = 0;
+        _head = _count = 0;
+        _deviceFrames = 0;
+        _stampLead = 0;
+    }
+
+    /// <summary>
+    /// Detached: the virtual device has played, since the detach, first what the real device held and then the queue
+    /// from its head; removes what it took (counted as expired) and leaves in <c>_deviceFrames</c> what it still holds
+    /// of the real device's audio, so a synchronized write counts the queue as a device would. Where the queue ran dry
+    /// it played silence, as a device does, so the timeline slips the same way and the next write corrects it.
+    /// </summary>
+    void ExpireDetached()
+    {
+        if (_consumer != Consumer.Detached) return;
+        long played = Math.Max(0, _clock() - _detachedAt) * _rate / 1000;
+        _deviceFrames = (int)Math.Clamp(_detachedHeld - played, 0, int.MaxValue);
+        long due = played - _detachedHeld - _detachedTaken;
+        if (due <= 0) return;
+        _detachedTaken += due;
+        int samples = (int)Math.Min(due, _count / _channels) * _channels;
+        Discard(samples);
+        _expiredFrames += samples / _channels;
+    }
 
     int Wrap(int index) => index >= _ring.Length ? index - _ring.Length : index;
 
