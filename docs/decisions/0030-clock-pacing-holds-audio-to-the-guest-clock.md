@@ -1,6 +1,6 @@
 # 0030. Clock pacing holds audio to the guest clock by packet timestamps
 
-- Status: Proposed
+- Status: Accepted (by the human, 2026-10-30, with the timing budget and the render worker exit limitation (E4) below)
 - Date: 2026-10-30
 - Decided by: the human ("A/V sync 做，clock 模式延遲音訊", 2026-10-30: do A/V sync, by delaying audio in `clock`
   mode); the mechanism by the agent (spec silent), revised after Codex's review
@@ -65,7 +65,7 @@
     Unsynchronized writes reset the stamp lead. While synchronized the ring is not trimmed. A rebase is applied with
     the next packet (10 ms later while playing), not on its own: a separate retime from the main thread could race the
     packet's delay.
-  - **Timing budget (open: for the human to accept).** Every synchronized sample still in the queue is at most 40 ms
+  - **Timing budget (accepted by the human, 2026-10-30).** Every synchronized sample still in the queue is at most 40 ms
     off its stamp-derived time: the uncorrected shift (at most 30 ms while audio is held) plus its packet's pending
     lead (at most 10 ms); after a correction, at most 10 ms. Real source pauses of 10 ms or less are not laid out on
     their own: following audio plays up to 10 ms early until later gaps add past 10 ms. Larger pauses are laid out

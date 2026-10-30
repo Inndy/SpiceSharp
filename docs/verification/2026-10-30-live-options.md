@@ -59,7 +59,7 @@ and `imageCompression`; `--debug` was on for the log.
   48–52: 25, 52–56: 29, 56–60: 34, 60–64: 19. Likely cause: `SystemPacingClock` uses `Environment.TickCount64` and a
   thread-pool `Timer`, both at the default system timer resolution. `spacing` would likely show the same when it
   holds frames; on this LAN it never did. A higher timer resolution costs energy (principles), so this is for the human to weigh, not a fix to
-  make here.
+  make here. The human chose to keep the default resolution (2026-10-30).
 - **F2: in `clock` mode the last ~0.4 s of a stream never reaches the screen and isn't counted as dropped.** In both
   probe runs 301 frames arrived, the log said 0 dropped, and 293 were drawn: the missing 8 are the frames still queued
   (the 423 ms lead) when the guest window closed. The stream itself ended 1 s later (spice-server's stream timeout),

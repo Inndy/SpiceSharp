@@ -151,7 +151,7 @@ pacing off, full gap layout, queue epoch; decision 0030 as revised). The viewer 
 | Switches in the viewer | menu, `clock` → `off` → `clock` → `off`, 14 s apart | tone intervals 2000 ms except a 379 ms skip, a **365 ms** gap (was 330) and a 364 ms skip; `dropped samples 71356, discarded on close 960; clock pacing made 2 corrections (36672 frames of silence inserted, 0 dropped)`; `display: stream 40 ended after 1175 frames, 16 dropped` | pass |
 | Steady sync, `clock` | continuous, 40 s, probe | sync error **-3.7 ± 5.0** (-14.4 .. +5.3), arrival → heard 418.7, heard - due 14.7 ± 3.2; 1 correction | pass (was -1.5 ± 5.5) |
 | | continuous, 150 s, probe | sync error **+5.0 ± 13.2** (-24.9 .. +23.5); 2 corrections: the first, then at ~122 s `1488 dropped` (31 ms): drift 0.061 ms/s reached the 30 ms gate, moving the error from about +22 to about -19 ms (mean +11.2 before, -16.8 after) | pass (was +8.0 ± 7.6 with no drift correction; G4) |
-| Default device change | viewer, 1 s tones, one change per stream, timed into the drain (after STOP) | each change logs `Audio: default output device changed; reopening` twice (one per role) and the stream reopens; the drain completes on the new device about 60–70 ms early, `discarded on close 0`, no warning; after a change back to the recorded device the rest of the held tone (88–100 ms) is heard there | pass |
+| Default device change | viewer, 1 s tones, one change per stream, timed into the drain (after STOP) | each change logs `Audio: default output device changed; reopening` twice and the stream reopens; the drain completes on the new device about 60–70 ms early, `discarded on close 0`, no warning; after a change back to the recorded device the rest of the held tone (88–100 ms) is heard there | pass |
 | | viewer, changes 0.7 s apart | the second change within one stream ends it: `Warn Audio: output closed; the next playback start reopens the default device`, `discarded on close 24988` (260 ms) and `32860` (342 ms); the next sound reopens normally | G5 |
 
 ### Findings
@@ -175,8 +175,8 @@ pacing off, full gap layout, queue epoch; decision 0030 as revised). The viewer 
   the first drift correction came after ~2 minutes (one 31 ms drop, as designed), instead of the ~10 minutes estimated
   for a 40 ms gate. The sync error jumped from about +22 to about -19 ms. On this host the queue's aim sits ~17 ms
   ahead of where loopback hears it (F3), so after the correction the error sits near the opposite edge.
-- **G5: two device changes within one stream end it.** Each default change notifies twice (console and multimedia
-  roles), so it uses 2 of the 3 reopens `AudioOutput` allows before the counter resets (a stream open for more than
+- **G5: two device changes within one stream end it.** Each default change caused two reopens (`DeviceNotifications`
+  signals only for the console role, so the source of the second is unconfirmed), so it uses 2 of the 3 reopens `AudioOutput` allows before the counter resets (a stream open for more than
   5 s). A second change during the same stream ends it, and with `clock` pacing the held audio is discarded (counted
   in `discarded on close`). A single change, including one during the drain, is handled. The reopen limit predates
   0030; changes this close together were forced by the test.
