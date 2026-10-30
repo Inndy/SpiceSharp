@@ -53,6 +53,12 @@ assertion-based automation framework: a missing app/file or unexpected guest
 dialog must be checked in the recording/replay. Both rich captures have LZ,
 GLZ and QUIC traffic; neither contains CopyBits with these guest display setups.
 
+`tests/fixtures/scripts/ubuntu-rich.txt` is the GNOME equivalent for a logged-in
+Ubuntu desktop (overview, Files from the overview search, app grid); that guest sent
+LZ and GLZ only. A Linux guest whose display has powered down has no primary
+surface until input wakes it, and `--script` waits for the surface first, so wake
+the guest (or log it in) before recording.
+
 Each channel's plaintext stream is tapped after TLS. Files are named
 `<type>-<id>.spicerec`, e.g. `display-0.spicerec`; the main opener's `main` label
 is normalized to `main:0`. Each file starts with the seven ASCII bytes

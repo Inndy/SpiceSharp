@@ -1,0 +1,16 @@
+# GNOME (logged-in desktop): Activities overview, open Files from its search, close it, app grid, back to the desktop.
+wait 1200
+key win
+wait 1800
+type files
+wait 1500
+key enter
+wait 3000
+key alt+f4
+wait 1200
+key win+a
+wait 2500
+key esc
+wait 800
+key esc
+wait 1500

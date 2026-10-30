@@ -40,3 +40,30 @@ The scripted keyboard window move did not produce CopyBits; these guest display
 setups returned image updates instead. No QXL driver or server setting was changed.
 Rich replay tests explicitly require each of the three codec counters to be
 positive, in addition to zero errors and pixel-for-pixel golden equality.
+
+## Linux guest fixture (2026-10-30)
+
+Captured from the `ubuntu` guest (Ubuntu 26.04.1 Desktop, GNOME, logged in) with
+`scripts/ubuntu-rich.txt`: Activities overview, Files opened from its search and
+closed, the app grid, back to the desktop; 16 seconds including a two-second tail.
+Scrubbed with `scrub.py` (VM name and UUID); no IPv4 address, VM ID, VM name or
+account name appears in the channel bytes. The final frame shows the GNOME dock,
+wallpaper and the desktop's Home icon, no account name. 1.1 MB in all.
+
+| Fixture | Size | LZ_RGB | GLZ_RGB | QUIC | copy | copy_bits | Errors |
+|---|---|---|---|---|---|---|---|
+| ubuntu-rich | 640x512 | 1 | 47 | 0 | 48 | 0 | 0 |
+
+Also surface_create=1. The guest ran at 640x480 at the time; the qxl primary
+surface is 640x512 and SPICE_MSG_DISPLAY_MONITORS_CONFIG names the 640x480
+monitor, which the canvas doesn't apply, so the bottom 32 rows stay black (finding
+L2 of docs/verification/2026-10-30-ubuntu.md). Every draw is a full-frame
+DrawCopy: the first LZ, every later one GLZ. The guest sent no QUIC, CopyBits or
+video stream, so QUIC remains covered by the Windows fixtures only and milestone 2's
+"a Linux guest recording covering QUIC" isn't met by this capture.
+
+**Golden pending:** `ubuntu-rich` has no golden.png yet; the candidate awaits the
+human's approval. Until then `ReplayMatchesRecordedStats` checks it (zero errors,
+surface size and every canvas counter equal to the live `session.json`, LZ and GLZ
+present); `DesktopMatchesGolden` lists it once the golden is approved. The same
+stats test runs over the four Windows fixtures.
