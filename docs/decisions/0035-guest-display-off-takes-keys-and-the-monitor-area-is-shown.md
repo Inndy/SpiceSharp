@@ -11,6 +11,13 @@
   Decided by the human on 2026-10-31 (finding L11): the `Waiting` text is neutral, so the ~0.1 s that every normal
   connect spends in `Waiting` before the first surface doesn't alarm; the `Off` text is unchanged.
 
+  Decided by the human on 2026-10-31 (finding L14): the disconnect overlay gets a second line with the channel detail.
+  The first line, the reason ("The server closed the connection."), is unchanged; under it, smaller and dimmer, comes
+  the detail that `Describe` returns and the error dialog already shows (for a server close, which channel ended
+  first: "The server closed the inputs:0 channel."). The detail is left out when there is none or it repeats the
+  reason. It is drawn on the dimmed frame, on the message image when the display was off, and, before any frame, as a
+  dimmer line under the GDI-painted status.
+
 - **Context:** two findings of the Ubuntu guest check ([2026-10-30-ubuntu.md](../verification/2026-10-30-ubuntu.md)).
   L1: with the guest's display powered down, spice-server has no primary surface and sends only SET_ACK and
   DISPLAY_MARK on the display channel; the viewer stayed at "Connecting to …" and forwarded no input (every input path
@@ -102,4 +109,5 @@
   across a same-size surface (L6) and `Waiting` replaces "Connecting" once linked (L7); see
   [Re-check: L5–L7 fixes](../verification/2026-10-30-ubuntu.md#re-check-l5l7-fixes-decision-0035-2026-10-30-2335--2026-10-31-0008)
   for the live check. After it, any presenter failure stops keys in every state, the display-off state included
-  (review M3), and the message painted before the first frame is laid out again on a resize (L10).
+  (review M3), and the message painted before the first frame is laid out again on a resize (L10). That message
+  wraps, centred within a margin, so a narrow window shows all of it (L13); the disconnect detail is the L14 note above.

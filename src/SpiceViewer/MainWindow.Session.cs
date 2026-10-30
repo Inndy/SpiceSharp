@@ -64,7 +64,7 @@ sealed unsafe partial class MainWindow
         _guestW = w; _guestH = h; _guestX = x; _guestY = y;
         _state = ViewState.Connected;
         // The display is back (or a mode change finished): no "display off" message.
-        _messageTitle = _messageBody = null;
+        _messageTitle = _messageBody = _messageDetail = null;
         _presenter?.SetPlaceholder(null);
         if (_presenter is null)
         {
@@ -131,19 +131,20 @@ sealed unsafe partial class MainWindow
         Log.Info($"guest display: {(state == GuestDisplayState.Waiting ? "none yet" : "off")}; keys still go to the guest");
     }
 
-    // The message shown instead of the guest display, while there is none (null otherwise).
-    string? _messageTitle, _messageBody;
+    // The message shown instead of the guest display, while there is none (null otherwise); the detail is optional.
+    string? _messageTitle, _messageBody, _messageDetail;
 
     /// <summary>
     /// Shows a message instead of the guest display. Before any frame the window paints <paramref name="status"/> with
     /// GDI. Once a presenter exists, its flip-model swap chain stays composited over GDI painting even after it is
     /// released (finding L5), so the presenter shows the message instead, as an image drawn at the client size.
+    /// <paramref name="detail"/>, if any, is a smaller, dimmer line under the body (or the status).
     /// </summary>
-    void ShowMessage(string title, string body, string status)
+    void ShowMessage(string title, string body, string status, string? detail = null)
     {
-        _messageTitle = title; _messageBody = body;
+        _messageTitle = title; _messageBody = body; _messageDetail = detail;
         _messageW = _messageH = 0;
-        if (_presenter is null) { SetStatus(status); return; }
+        if (_presenter is null) { SetStatus(status, detail); return; }
         RenderMessage();
     }
 
@@ -164,7 +165,10 @@ sealed unsafe partial class MainWindow
         _messageW = w; _messageH = h;
         var pixels = new byte[w * h * 4];
         MemoryMarshal.Cast<byte, uint>(pixels.AsSpan()).Fill(0xFF202020); // the window background
-        DrawText(pixels, w, h, new SpiceRect(0, 0, w, h), _messageTitle, _messageBody);
+        // A disconnected window has the Close button over the image: keep the text above it (in image pixels).
+        int textBottom = _state == ViewState.Disconnected && rc.Height > 0
+            ? (int)((long)CloseButtonTop(rc, PInvoke.GetDpiForWindow(_hwnd)) * h / rc.Height) : h;
+        DrawTextBlock(pixels, w, h, new SpiceRect(0, 0, w, h), _messageTitle, _messageBody, _messageDetail, textBottom);
         _presenter.SetPlaceholder(new Presenter.Placeholder(pixels, w, h));
     }
 
@@ -283,7 +287,10 @@ sealed unsafe partial class MainWindow
             return;
         }
         if (_fullscreen) { _fullscreenWhenEnded = true; ToggleFullscreen(); }
-        DrawDisconnectedOverlay(error is null ? "The virtual machine closed the connection." : Describe(error).Instruction);
+        // The reason, then the detail the dialog would show (e.g. which channel the server closed) as a second, dimmer
+        // line (finding L14, decision 0035).
+        var (reason, detail) = Describe(error);
+        DrawDisconnectedOverlay(reason, detail == reason ? null : detail);
         PInvoke.SetWindowText(_hwnd, $"{_vv.DisplayTitle} — disconnected");
         _guestCursorHidden = false;
         _guestCursor = HCURSOR.Null;
@@ -308,8 +315,8 @@ sealed unsafe partial class MainWindow
         _ => ("The connection to the virtual machine was lost.", e.Message),
     };
 
-    /// <summary>Dims the last frame, writes the reason on it, and offers a Close button.</summary>
-    void DrawDisconnectedOverlay(string text)
+    /// <summary>Dims the last frame, writes the reason (and its detail, if any) on it, and offers a Close button.</summary>
+    void DrawDisconnectedOverlay(string text, string? detail)
     {
         if (_session is null) return;
         bool drawn = false;
@@ -320,12 +327,19 @@ sealed unsafe partial class MainWindow
             {
                 var px = MemoryMarshal.Cast<byte, uint>(s.Pixels.AsSpan());
                 for (int i = 0; i < px.Length; i++) px[i] = ((px[i] >> 2) & 0x3F3F3F) | 0xFF000000;
-                DrawText(s.Pixels, s.Width, s.Height, _session.Canvas.PrimaryArea, "Disconnected", text);
+                // Keep the text above where the Close button sits in the window now, mapped to surface pixels. The
+                // overlay is drawn once; a later resize scales it with the frame while the button keeps its offset.
+                var area = _session.Canvas.PrimaryArea;
+                var guest = GuestRect();
+                int textBottom = guest.Height > 0
+                    ? area.Top + (int)((long)(CloseButtonTop(ClientRect(), PInvoke.GetDpiForWindow(_hwnd)) - guest.top) * area.Height / guest.Height)
+                    : area.Bottom;
+                DrawTextBlock(s.Pixels, s.Width, s.Height, area, "Disconnected", text, detail, textBottom);
                 drawn = true;
             }
         }
         // No frame to draw on (the guest's display was off): show the reason as the message instead.
-        if (!drawn) ShowMessage("Disconnected", text, text);
+        if (!drawn) ShowMessage("Disconnected", text, text, detail);
         _presenter?.InvalidateAll();
         fixed (char* cls = "BUTTON")
         fixed (char* label = "Close")
@@ -345,12 +359,26 @@ sealed unsafe partial class MainWindow
         var rc = ClientRect();
         uint dpi = PInvoke.GetDpiForWindow(_hwnd);
         int bw = (int)(110 * dpi / 96), bh = (int)(32 * dpi / 96);
-        PInvoke.SetWindowPos(_closeButton, HWND.Null, (rc.Width - bw) / 2, rc.Height / 2 + (int)(56 * dpi / 96), bw, bh,
+        PInvoke.SetWindowPos(_closeButton, HWND.Null, (rc.Width - bw) / 2, CloseButtonTop(rc, dpi), bw, bh,
             SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
     }
 
-    /// <summary>Renders text into a top-down BGRA image (a surface or a message image) with GDI (on a DIB copy of the pixels), centered on the shown area.</summary>
-    void DrawText(byte[] pixels, int width, int height, SpiceRect area, string title, string body)
+    /// <summary>Below the centre, where the overlay's text ends; kept inside a small window (320x240 at 150 %).</summary>
+    static int CloseButtonTop(RECT client, uint dpi) =>
+        Math.Max(0, Math.Min(client.Height / 2 + (int)(56 * dpi / 96), client.Height - (int)(40 * dpi / 96)));
+
+    /// <summary><see cref="DrawTextBlock"/> with nothing to keep clear but the edge of the shown area.</summary>
+    void DrawText(byte[] pixels, int width, int height, SpiceRect area, string title, string body, string? detail = null) =>
+        DrawTextBlock(pixels, width, height, area, title, body, detail, area.Bottom);
+
+    /// <summary>
+    /// Renders text into a top-down BGRA image (a surface or a message image) with GDI (on a DIB copy of the pixels),
+    /// centered on the shown area: the title, the body under it, and the optional detail under that, smaller and dimmer.
+    /// Each part gets its full wrapped height (finding R1: with DT_EDITCONTROL a capped rectangle drops the last line).
+    /// The block sits just below the centre, and moves up as one when it would pass <paramref name="textBottom"/> (the
+    /// Close button) or the area's bottom, but never above the area's top.
+    /// </summary>
+    void DrawTextBlock(byte[] pixels, int width, int height, SpiceRect area, string title, string body, string? detail, int textBottom)
     {
         var bmi = new BITMAPINFO();
         bmi.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
@@ -371,15 +399,45 @@ sealed unsafe partial class MainWindow
         int ax = area.Left, ay = area.Top, aw = area.Width, ah = area.Height;
         var big = MakeFont(-Math.Max(18, ah / 22), 600);
         var small = MakeFont(-Math.Max(12, ah / 45), 400);
+        var detailFont = detail is null ? default : MakeFont(-Math.Max(11, ah / 55), 400);
+        const DRAW_TEXT_FORMAT Title = DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_SINGLELINE | DRAW_TEXT_FORMAT.DT_NOPREFIX;
+        const DRAW_TEXT_FORMAT Wrap = DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_WORDBREAK | DRAW_TEXT_FORMAT.DT_EDITCONTROL | DRAW_TEXT_FORMAT.DT_NOPREFIX;
+        int textLeft = ax + aw / 10, textRight = ax + aw * 9 / 10;
+        // Measure every part first, each in its own font.
         var oldFont = PInvoke.SelectObject(dc, big);
-        var r1 = new RECT(ax, ay + ah / 2 - ah / 10, ax + aw, ay + ah / 2 - ah / 40);
-        fixed (char* t = title) PInvoke.DrawText(dc, t, title.Length, ref r1, DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_BOTTOM | DRAW_TEXT_FORMAT.DT_SINGLELINE | DRAW_TEXT_FORMAT.DT_NOPREFIX);
+        int titleH = title.Length == 0 ? 0 : MeasureText(dc, title, ax, ax + aw, Title);
         PInvoke.SelectObject(dc, small);
-        var r2 = new RECT(ax + aw / 10, ay + ah / 2 - ah / 50, ax + aw * 9 / 10, ay + ah / 2 + ah / 12);
-        fixed (char* t = body) PInvoke.DrawText(dc, t, body.Length, ref r2, DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_WORDBREAK | DRAW_TEXT_FORMAT.DT_NOPREFIX);
+        int bodyH = MeasureText(dc, body, textLeft, textRight, Wrap);
+        int detailH = 0, gap = Math.Max(2, ah / 150);
+        if (detail is not null) { PInvoke.SelectObject(dc, detailFont); detailH = MeasureText(dc, detail, textLeft, textRight, Wrap); }
+        // The title ends just above the centre and the body starts just below it, as before; the block moves up as one
+        // if its end would pass the Close button or the area's bottom, but not above the area's top.
+        int titleTop = ay + ah / 2 - ah / 40 - titleH, bodyTop = ay + ah / 2 - ah / 50;
+        int end = bodyTop + bodyH + (detail is null ? 0 : gap + detailH);
+        int limit = Math.Min(textBottom, ay + ah) - Math.Max(2, ah / 100);
+        int shift = Math.Max(0, Math.Min(end - limit, Math.Min(titleTop, bodyTop) - ay));
+        titleTop -= shift; bodyTop -= shift;
+        if (titleH > 0)
+        {
+            PInvoke.SelectObject(dc, big);
+            var r1 = new RECT(ax, titleTop, ax + aw, titleTop + titleH);
+            fixed (char* t = title) PInvoke.DrawText(dc, t, title.Length, ref r1, Title);
+        }
+        PInvoke.SelectObject(dc, small);
+        var r2 = new RECT(textLeft, bodyTop, textRight, bodyTop + bodyH);
+        fixed (char* t = body) PInvoke.DrawText(dc, t, body.Length, ref r2, Wrap);
+        if (detail is not null)
+        {
+            PInvoke.SelectObject(dc, detailFont);
+            PInvoke.SetTextColor(dc, new COLORREF(0x00A8A8A8));
+            int top = bodyTop + bodyH + gap;
+            var r3 = new RECT(textLeft, top, textRight, top + detailH);
+            fixed (char* t = detail) PInvoke.DrawText(dc, t, detail.Length, ref r3, Wrap);
+        }
         PInvoke.SelectObject(dc, oldFont);
         PInvoke.DeleteObject(big);
         PInvoke.DeleteObject(small);
+        if (!detailFont.IsNull) PInvoke.DeleteObject(detailFont);
         new Span<byte>(bits, pixels.Length).CopyTo(pixels);
         var px = MemoryMarshal.Cast<byte, uint>(pixels.AsSpan());
         for (int i = 0; i < px.Length; i++) px[i] |= 0xFF000000; // GDI clears alpha where it draws

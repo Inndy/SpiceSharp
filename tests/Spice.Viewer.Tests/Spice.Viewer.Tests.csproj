@@ -13,6 +13,7 @@
     <Compile Include="../../src/SpiceViewer/Viewport.cs" Link="Production/Viewport.cs" />
     <Compile Include="../../src/SpiceViewer/ClipboardFormats.cs" Link="Production/ClipboardFormats.cs" />
     <Compile Include="../../src/SpiceViewer/Settings.cs" Link="Production/Settings.cs" />
+    <Compile Include="../../src/SpiceViewer/LogFile.cs" Link="Production/LogFile.cs" />
     <AdditionalFiles Include="../../src/SpiceViewer/NativeMethods.json" />
     <ProjectReference Include="../../src/Spice.Canvas/Spice.Canvas.csproj" />
     <ProjectReference Include="../../src/SpiceViewer/SpiceViewer.csproj" Aliases="ViewerImplementation" />

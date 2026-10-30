@@ -1,0 +1,3 @@
+CreateFile
+WriteFile
+FILE_ACCESS_RIGHTS

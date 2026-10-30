@@ -30,7 +30,8 @@ Settings and log
 SpiceViewer is portable: it keeps its settings (settings.json) and log (viewer.log) in a "data"
 folder next to SpiceViewer.exe, created on first run. If that folder can't be written (for
 example under Program Files), it uses %APPDATA%\SpiceViewer for settings and
-%LOCALAPPDATA%\SpiceViewer for the log instead. Passwords are never logged.
+%LOCALAPPDATA%\SpiceViewer for the log instead. Passwords are never logged. Viewers running
+at the same time share viewer.log; each line shows its viewer's process ID in [brackets].
 
 The window's size, position, maximized/full-screen state and scaling are remembered per VM
 (by proxy or host plus the .vv title; files without a title are not remembered). The other

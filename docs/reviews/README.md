@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-31-l13-l15.md](2026-10-31-l13-l15.md) | L13-L15 status/detail layout, shared append-only log, truncation, I/O errors, handle lifetime, and window-free regressions |
 | [2026-10-30-pveterm.md](2026-10-30-pveterm.md) | PveTerm protocol, console input/lifecycle, descriptor hand-off, TLS policy, allocation, and window-free regressions |
 | [2026-10-30-display-off-and-monitor-area.md](2026-10-30-display-off-and-monitor-area.md) | Guest display-off state, monitor-area geometry, input identity/edges, and window-free regressions |
 | [2026-10-30-audio-detach.md](2026-10-30-audio-detach.md) | Audio stream/device lifetime, detached expiry and reattach timing, retry energy policy, notification callbacks, and window-free regressions |

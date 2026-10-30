@@ -22,3 +22,6 @@ D3D11_SDK_VERSION
 USEROBJECTFLAGS
 GetThreadDesktop
 GetCurrentThreadId
+CreateFile
+WriteFile
+FILE_ACCESS_RIGHTS

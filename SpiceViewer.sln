@@ -43,6 +43,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PveTerm", "src\PveTerm\PveT
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Pve.Term.Tests", "tests\Pve.Term.Tests\Pve.Term.Tests.csproj", "{26251391-1152-4163-8D0A-CD245899F371}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Spice.Diagnostics.Tests", "tests\Spice.Diagnostics.Tests\Spice.Diagnostics.Tests.csproj", "{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -257,6 +259,18 @@ Global
 		{26251391-1152-4163-8D0A-CD245899F371}.Release|x64.Build.0 = Release|Any CPU
 		{26251391-1152-4163-8D0A-CD245899F371}.Release|x86.ActiveCfg = Release|Any CPU
 		{26251391-1152-4163-8D0A-CD245899F371}.Release|x86.Build.0 = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|x64.Build.0 = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Debug|x86.Build.0 = Debug|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|x64.ActiveCfg = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|x64.Build.0 = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|x86.ActiveCfg = Release|Any CPU
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -279,5 +293,6 @@ Global
 		{B0768352-F323-44A5-B072-5691A32A4DAB} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{2FFA1ABE-7502-4A18-BFA0-2918A5833BB6} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{26251391-1152-4163-8D0A-CD245899F371} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{4FE0736D-77FA-44A1-BA1E-80BAA18F9957} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

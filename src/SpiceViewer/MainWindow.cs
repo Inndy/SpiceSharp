@@ -36,6 +36,8 @@ sealed unsafe partial class MainWindow
     Presenter? _presenter;
     ViewState _state = ViewState.Connecting;
     string _status;
+    /// <summary>A dimmer line under <see cref="_status"/> (a disconnect's detail), or null.</summary>
+    string? _statusDetail;
     bool _gotFirstFrame;
     /// <summary>Every channel is linked (ConnectAsync returned): keys may go to the guest even before it has a display.</summary>
     bool _linked;
@@ -258,19 +260,54 @@ sealed unsafe partial class MainWindow
             PInvoke.FillRect(hdc, &rc, brush);
             PInvoke.DeleteObject(brush);
             PInvoke.SetBkMode(hdc, BACKGROUND_MODE.TRANSPARENT);
-            PInvoke.SetTextColor(hdc, new COLORREF(0x00E0E0E0));
             var old = PInvoke.SelectObject(hdc, _font);
-            fixed (char* s = _status)
-                PInvoke.DrawText(hdc, s, _status.Length, ref rc, DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_VCENTER | DRAW_TEXT_FORMAT.DT_SINGLELINE | DRAW_TEXT_FORMAT.DT_NOPREFIX);
+            PaintStatus(hdc, rc);
             PInvoke.SelectObject(hdc, old);
         }
         else _presenter.InvalidateAll();
         PInvoke.EndPaint(_hwnd, ps);
     }
 
-    void SetStatus(string status)
+    /// <summary>
+    /// The status, word-wrapped and centred as a block within a margin, so a narrow window shows all of it (finding
+    /// L13; a word too long for a line is broken as well). The detail line follows, dimmer. With the Close button
+    /// shown, the block stays above it. Laid out on every paint; WM_SIZE invalidates (L10).
+    /// </summary>
+    void PaintStatus(HDC hdc, RECT client)
+    {
+        const DRAW_TEXT_FORMAT Wrap = DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_WORDBREAK | DRAW_TEXT_FORMAT.DT_EDITCONTROL | DRAW_TEXT_FORMAT.DT_NOPREFIX;
+        uint dpi = PInvoke.GetDpiForWindow(_hwnd);
+        int margin = (int)(16 * dpi / 96), gap = (int)(6 * dpi / 96);
+        int left = client.left + margin, right = Math.Max(left + 1, client.right - margin);
+        int top = client.top + margin, bottom = client.bottom - margin;
+        if (!_closeButton.IsNull) bottom = Math.Min(bottom, CloseButtonTop(client, dpi) - 2 * gap);
+        int h1 = MeasureText(hdc, _status, left, right, Wrap);
+        int h2 = _statusDetail is null ? 0 : MeasureText(hdc, _statusDetail, left, right, Wrap);
+        int total = h1 + (_statusDetail is null ? 0 : gap + h2);
+        // Centred on the client area, as the single line was; moved up if it would reach the Close button.
+        int y = Math.Max(top, Math.Min((client.top + client.bottom - total) / 2, bottom - total));
+        PInvoke.SetTextColor(hdc, new COLORREF(0x00E0E0E0));
+        var r1 = new RECT(left, y, right, y + h1);
+        fixed (char* s = _status) PInvoke.DrawText(hdc, s, _status.Length, ref r1, Wrap);
+        if (_statusDetail is null) return;
+        PInvoke.SetTextColor(hdc, new COLORREF(0x00A0A0A0));
+        var r2 = new RECT(left, y + h1 + gap, right, y + h1 + gap + h2);
+        fixed (char* s = _statusDetail) PInvoke.DrawText(hdc, s, _statusDetail.Length, ref r2, Wrap);
+    }
+
+    /// <summary>The height <paramref name="text"/> takes when wrapped between <paramref name="left"/> and <paramref name="right"/>.</summary>
+    static int MeasureText(HDC hdc, string text, int left, int right, DRAW_TEXT_FORMAT format)
+    {
+        var r = new RECT(left, 0, right, 0);
+        fixed (char* s = text) PInvoke.DrawText(hdc, s, text.Length, ref r, format | DRAW_TEXT_FORMAT.DT_CALCRECT);
+        return r.Height;
+    }
+
+    /// <summary>Shows <paramref name="status"/> (and a dimmer <paramref name="detail"/> line) while nothing else is drawn.</summary>
+    void SetStatus(string status, string? detail = null)
     {
         _status = status;
+        _statusDetail = detail;
         PInvoke.InvalidateRect(_hwnd, (RECT?)null, false);
     }
 
@@ -328,7 +365,7 @@ sealed unsafe partial class MainWindow
             // DisplayOff (and Waiting) too: since decision 0035 the presenter outlives a blanked display to show the
             // message, and keys must stop there as well (review M3). A disconnected window stays disconnected.
             if (_state != ViewState.Disconnected) _state = ViewState.DisplayFailed;
-            _messageTitle = _messageBody = null; // the failure text below replaces any display-off message
+            _messageTitle = _messageBody = _messageDetail = null; // the failure text below replaces any display-off message
             CancelGuestInput();
             UpdateKeyboardCapture();
             if (_fullscreen) { _fullscreenWhenEnded = true; ToggleFullscreen(); }

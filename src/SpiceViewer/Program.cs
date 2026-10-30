@@ -81,17 +81,36 @@ static class Program
             var dir = AppPaths.LogDir;
             Directory.CreateDirectory(dir);
             var file = Path.Combine(dir, "viewer.log");
-            // Keep the log small: start over when it passes 1 MB.
-            if (File.Exists(file) && new FileInfo(file).Length > 1 << 20) File.Delete(file);
-            var writer = new StreamWriter(new FileStream(file, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+            // Keep the log small: start over when it passes 1 MB. Viewers started from the same folder share the file;
+            // every line carries the process ID (docs/decisions/0040).
+            var log = LogFile.Open(file, 1 << 20);
             int pid = Environment.ProcessId;
-            var gate = new object();
             Log.MinLevel = debug || Environment.GetEnvironmentVariable("SPICEVIEWER_DEBUG") == "1" ? LogLevel.Debug : LogLevel.Info;
-            Log.Sink = (level, msg) =>
-            {
-                lock (gate) writer.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [{pid}] {level,-5} {msg}");
-            };
+            Log.Sink = (level, msg) => WriteLogLine(log, $"{DateTime.Now:HH:mm:ss.fff} [{pid}] {level,-5} {msg}", pid);
         }
+        // No log at all (the folder or file can't be opened): the viewer runs without one.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>Lines the log refused since the last one it took.</summary>
+    static int s_droppedLogLines;
+
+    /// <summary>
+    /// Logging is best effort and never fails the caller (a session thread, the UI thread): a line the file refuses
+    /// (disk full, a locked range, docs/decisions/0040) is dropped, not retried, and counted; the next line that gets
+    /// through is followed by a warning saying how many were lost, so the gap is visible in the log.
+    /// </summary>
+    static void WriteLogLine(LogFile log, string line, int pid)
+    {
+        try
+        {
+            log.WriteLine(line);
+            if (Volatile.Read(ref s_droppedLogLines) == 0) return;
+            int lost = Interlocked.Exchange(ref s_droppedLogLines, 0);
+            if (lost == 0) return;
+            try { log.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [{pid}] {"Warn",-5} log: {lost} earlier line(s) could not be written"); }
+            catch (Exception e) when (e is IOException or ObjectDisposedException) { Interlocked.Add(ref s_droppedLogLines, lost); }
+        }
+        catch (Exception e) when (e is IOException or ObjectDisposedException) { Interlocked.Increment(ref s_droppedLogLines); }
     }
 }
