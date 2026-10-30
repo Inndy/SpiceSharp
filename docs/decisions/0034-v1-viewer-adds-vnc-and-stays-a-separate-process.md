@@ -14,6 +14,13 @@
     never on disk or the command line.
   - In v1 the viewer also speaks RFB over Proxmox's VNC WebSocket, with a native C# client. noVNC's JavaScript is
     not embedded.
+  - Scope is the RFB dialect Proxmox actually serves, not general VNC (human, 2026-10-30: "support VNC
+    dialect/extensions that PVE is using"). That means:
+    - QEMU's VNC server, reached through `vncproxy` and `vncwebsocket` with the ticket as the password;
+    - the encodings and pseudo-encodings it offers, for example QEMU's extended key events;
+    - the dialect of any other Proxmox console endpoint the client opens.
+  - The exact list is taken from QEMU's and Proxmox's sources when the client is designed, and recorded there.
+    Other VNC servers' extensions and security types are out of scope.
   - The VNC client reuses the viewer's presenter, input and keyboard hook. It sits behind the same transport and
     protocol seams as SPICE.
   - The viewer stays usable standalone.
