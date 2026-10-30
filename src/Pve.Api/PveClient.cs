@@ -58,6 +58,9 @@ public sealed class PveClient : IDisposable
     public bool IsSignedIn => _apiToken is not null || _ticket is not null;
     /// <summary>USER@REALM (ticket) or the token ID, once signed in.</summary>
     public string? SignedInAs { get; private set; }
+    /// <summary>The version the last <see cref="GetVersionAsync"/> of this sign-in returned, or null. A token's sign-in
+    /// check fetches it, so a front end can show it without asking again (smoke test B6).</summary>
+    public string? ServerVersion { get; private set; }
 
     /// <param name="apiUrl">https://host:port, as <see cref="NormalizeApiUrl"/> returns it.</param>
     /// <param name="caPem">A CA to pin, or null for the Windows trust roots (docs/decisions/0033).</param>
@@ -185,6 +188,17 @@ public sealed class PveClient : IDisposable
         _ticket = null;
         _pending = null;
         SignedInAs = null;
+        ServerVersion = null;
+    }
+
+    /// <summary>Drops a password session the server or the clock ended (expiry, a refused renewal, a 401), with
+    /// everything that belonged to it (review R5). A ticket renewed or replaced meanwhile is left alone.</summary>
+    void DropTicket(Ticket t)
+    {
+        if (_ticket != t) return;
+        _ticket = null;
+        SignedInAs = null;
+        ServerVersion = null;
     }
 
     void Accept(Ticket t)
@@ -219,7 +233,7 @@ public sealed class PveClient : IDisposable
         var age = _time.GetElapsedTime(t.IssuedAt);
         if (age >= TicketLifetime - ExpiryMargin)
         {
-            if (_ticket == t) _ticket = null;
+            DropTicket(t);
             Log?.Invoke("auth: the ticket expired");
             throw new PveAuthException("The session expired; sign in again.");
         }
@@ -237,8 +251,7 @@ public sealed class PveClient : IDisposable
             }
             catch (PveAuthException)
             {
-                _ticket = null;
-                SignedInAs = null;
+                DropTicket(t);
                 throw;
             }
             catch (PveApiException e)
@@ -257,7 +270,7 @@ public sealed class PveClient : IDisposable
     {
         using var doc = await SendAsync(HttpMethod.Get, "/version", null, authenticated: true, ct).ConfigureAwait(false);
         var data = Data(doc);
-        return Str(data, "version") ?? "unknown";
+        return ServerVersion = Str(data, "version") ?? "unknown";
     }
 
     /// <summary><c>GET /cluster/resources?type=vm</c>: VMs and containers the account may see, by VMID.</summary>
@@ -377,7 +390,10 @@ public sealed class PveClient : IDisposable
         try
         {
             try { res = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false); }
-            catch (HttpRequestException e) { throw new PveApiException(Describe(e), null, e); }
+            // Transport errors can quote what the server sent (a malformed header line may echo the request's own
+            // Authorization header), so their text is redacted like an error answer, and the raw exception is not
+            // kept as the inner one, where a log of the whole chain would print it unredacted (review R1).
+            catch (HttpRequestException e) { throw new PveApiException(Describe(e, secrets)); }
             string pathOnly = path.Split('?')[0];
             Log?.Invoke($"api: {method} {pathOnly} -> {(int)res.StatusCode}");
             bool ok = res.StatusCode == HttpStatusCode.OK;
@@ -385,14 +401,15 @@ public sealed class PveClient : IDisposable
             try { body = await ReadBodyAsync(res.Content, ok ? MaxResponseBytes : MaxErrorBytes, truncate: !ok, deadline.Token).ConfigureAwait(false); }
             catch (Exception e) when (e is HttpRequestException or IOException)
             {
-                throw new PveApiException("The connection broke while the server's answer arrived.", (int)res.StatusCode, e);
+                // Same as above: only the type, never the raw server-derived text, survives (review R1).
+                throw new PveApiException($"The connection broke while the server's answer arrived ({e.GetType().Name}).", (int)res.StatusCode);
             }
             if (!ok)
             {
                 string why = ErrorText(res, body, secrets);
                 if (res.StatusCode == HttpStatusCode.Unauthorized)
                 {
-                    if (authenticated && _ticket == ticket && ticket is not null) { _ticket = null; SignedInAs = null; }
+                    if (authenticated && ticket is not null) DropTicket(ticket);
                     throw new PveAuthException(path.StartsWith("/access/ticket", StringComparison.Ordinal)
                         ? "Sign-in failed: " + why : "The server refused the credentials: " + why, 401);
                 }
@@ -470,13 +487,22 @@ public sealed class PveClient : IDisposable
         return text;
     }
 
-    string Describe(HttpRequestException e)
+    /// <summary>A transport failure as one line, with <paramref name="secrets"/> (what the request carried) redacted:
+    /// HttpClient's messages can quote the server's malformed answer, which may echo them (review R1).</summary>
+    string Describe(HttpRequestException e, List<string> secrets)
     {
+        string text = $"Could not reach {ApiUrl.Authority}: {e.Message}";
         for (Exception? x = e; x is not null; x = x.InnerException)
+        {
             if (x is AuthenticationException)
+            {
                 // The policy's own reason when it refused the certificate; else Schannel's.
-                return Tls.Failure is { } f ? $"TLS: {f}." : $"TLS handshake failed ({x.Message}).";
-        return $"Could not reach {ApiUrl.Authority}: {e.Message}";
+                text = Tls.Failure is { } f ? $"TLS: {f}." : $"TLS handshake failed ({x.Message}).";
+                break;
+            }
+        }
+        text = Redact(text, secrets);
+        return text.Length > 600 ? text[..600] + "..." : text;
     }
 
     static JsonElement Data(JsonDocument doc)

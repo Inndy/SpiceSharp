@@ -14,6 +14,7 @@ public sealed class CredentialStoreException(string message) : Exception(message
 /// <c>PREFIX/HOST:PORT/token/USER@REALM!TOKENID</c> or <c>PREFIX/HOST:PORT/password/USER@REALM</c>, the account
 /// spelled by <see cref="EncodeAccount"/> so that case-only differences stay separate entries; the secret is
 /// the blob, as UTF-16 (what Credential Manager's own UI writes). Nothing secret is logged or put in a message.
+/// Calls from several threads are safe: they take turns (see <see cref="CallLock"/>).
 /// </summary>
 public sealed class CredentialStore
 {
@@ -24,6 +25,15 @@ public sealed class CredentialStore
     public string Prefix { get; }
 
     const int ErrorNotFound = 1168; // ERROR_NOT_FOUND
+
+    /// <summary>
+    /// Every Credential Manager call in this process, for every store, holds this lock. Windows doesn't keep
+    /// overlapping calls from one process consistent: a write that overlaps another thread's call can be missing
+    /// from the next read and enumeration and turn up later, and a delete can be undone. Parallel test classes hit
+    /// this (decision 0039). The error code is taken inside the lock, because releasing a contended lock can
+    /// overwrite the last P/Invoke error.
+    /// </summary>
+    static readonly Lock CallLock = new();
 
     /// <param name="prefix">Tests pass their own prefix so they never touch real entries.</param>
     public CredentialStore(string prefix = DefaultPrefix)
@@ -80,8 +90,14 @@ public sealed class CredentialStore
                 // This machine only: the secret does not roam with a domain profile.
                 Persist = CRED_PERSIST.CRED_PERSIST_LOCAL_MACHINE,
             };
-            if (!PInvoke.CredWrite(&cred, 0))
-                throw new CredentialStoreException($"could not save the credential (error {Marshal.GetLastPInvokeError()}).");
+            bool ok;
+            int error;
+            lock (CallLock)
+            {
+                ok = PInvoke.CredWrite(&cred, 0);
+                error = ok ? 0 : Marshal.GetLastPInvokeError();
+            }
+            if (!ok) throw new CredentialStoreException($"could not save the credential (error {error}).");
         }
     }
 
@@ -91,10 +107,14 @@ public sealed class CredentialStore
         CheckTarget(target);
         CREDENTIALW* cred;
         bool ok;
-        fixed (char* t = target) ok = PInvoke.CredRead(t, CRED_TYPE.CRED_TYPE_GENERIC, 0, &cred);
+        int error;
+        lock (CallLock)
+        {
+            fixed (char* t = target) ok = PInvoke.CredRead(t, CRED_TYPE.CRED_TYPE_GENERIC, 0, &cred);
+            error = ok ? 0 : Marshal.GetLastPInvokeError();
+        }
         if (!ok)
         {
-            int error = Marshal.GetLastPInvokeError();
             if (error == ErrorNotFound) return null;
             throw new CredentialStoreException($"could not read the credential (error {error}).");
         }
@@ -118,9 +138,13 @@ public sealed class CredentialStore
     {
         CheckTarget(target);
         bool ok;
-        fixed (char* t = target) ok = PInvoke.CredDelete(t, CRED_TYPE.CRED_TYPE_GENERIC, 0);
+        int error;
+        lock (CallLock)
+        {
+            fixed (char* t = target) ok = PInvoke.CredDelete(t, CRED_TYPE.CRED_TYPE_GENERIC, 0);
+            error = ok ? 0 : Marshal.GetLastPInvokeError();
+        }
         if (ok) return true;
-        int error = Marshal.GetLastPInvokeError();
         if (error == ErrorNotFound) return false;
         throw new CredentialStoreException($"could not delete the credential (error {error}).");
     }
@@ -147,10 +171,14 @@ public sealed class CredentialStore
         CREDENTIALW** creds;
         uint count;
         bool ok;
-        fixed (char* filter = Prefix + "/*") ok = PInvoke.CredEnumerate(filter, 0, &count, &creds);
+        int error;
+        lock (CallLock)
+        {
+            fixed (char* filter = Prefix + "/*") ok = PInvoke.CredEnumerate(filter, 0, &count, &creds);
+            error = ok ? 0 : Marshal.GetLastPInvokeError();
+        }
         if (!ok)
         {
-            int error = Marshal.GetLastPInvokeError();
             if (error == ErrorNotFound) return [];
             throw new CredentialStoreException($"could not list the credentials (error {error}).");
         }

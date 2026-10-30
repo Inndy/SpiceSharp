@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -35,6 +36,9 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         _ui = DispatcherQueue.GetForCurrentThread();
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = false;
+        // The system caption follows Windows' app mode (dark or light), as the content does; by default it stays light
+        // (smoke test B2).
+        AppWindow.TitleBar.PreferredTheme = TitleBarTheme.UseDefaultAppMode;
 
         _home = LauncherPaths.FindHome(AppContext.BaseDirectory, File.Exists);
         _location = LauncherPaths.Resolve(_home);
@@ -54,7 +58,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             LauncherLog.Write("exit");
         };
         // Dialogs need the XamlRoot, which exists once the content is loaded; selecting a server may sign in.
-        ((FrameworkElement)Content).Loaded += (_, _) =>
+        Root.Loaded += (_, _) =>
         {
             if (Servers.FirstOrDefault(s => s.Config.Id == _settings.LastServerId) is { } last) ServerList.SelectedItem = last;
             else if (Servers.Count == 0) ShowInfo("Add a Proxmox VE server to begin.", InfoBarSeverity.Informational);
@@ -91,6 +95,51 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         Notice.Title = what;
         Notice.Message = message;
         Notice.IsOpen = true;
+    }
+
+    bool _reporting;
+
+    /// <summary>
+    /// A failure the code didn't expect (a bug): shown and logged with its stack trace, never dropped silently (smoke
+    /// test B1). Exception messages carry no secrets (see <see cref="App.Describe"/>). It never throws and never
+    /// re-enters itself, so a failing status bar or log can't start a cascade of reports (review R2); the log append is
+    /// best effort and can't stop the message from showing. A fatal failure ends the process instead (review R3).
+    /// </summary>
+    public void ShowUnexpected(string what, Exception e)
+    {
+        if (App.IsFatal(e)) App.Fatal(what, e);
+        if (_reporting) { LauncherLog.Write($"unexpected while reporting: {what}: {App.Describe(e)}"); return; }
+        _reporting = true;
+        try
+        {
+            Notice.Severity = InfoBarSeverity.Error;
+            Notice.Title = what;
+            Notice.Message = $"The launcher hit an unexpected error ({e.GetType().Name}: {e.Message}). launcher.log has the details.";
+            Notice.IsOpen = true;
+        }
+        catch (Exception x) when (!App.IsFatal(x))
+        {
+            LauncherLog.Write($"unexpected: the status bar could not show the next error: {App.Describe(x)}");
+        }
+        finally { _reporting = false; }
+        LauncherLog.Write($"unexpected: {what}: {App.Describe(e)}");
+    }
+
+    /// <summary>Runs an event handler's work. Exceptions from <c>async void</c> handlers would otherwise leave no trace
+    /// (smoke test B1), so whatever escapes is shown and logged. Fatal ones go on to the application's handler, which
+    /// ends the process (review R3).</summary>
+    async void Guard(string what, Func<Task> work)
+    {
+        try { await work(); }
+        catch (Exception e) when (!App.IsFatal(e)) { ShowUnexpected(what, e); }
+    }
+
+    void SetHeading(string name, string? detail = null)
+    {
+        HeadingName.Text = name;
+        HeadingDetail.Text = detail ?? "";
+        // One line, trimmed to fit (smoke test B4); the whole text is in the tooltip.
+        ToolTipService.SetToolTip(Heading, detail is null ? null : $"{name} · {detail}");
     }
 
     void UpdateButtons()
@@ -146,6 +195,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         }
         catch (PveApiException e) { ShowError(what, e.Message); }
         catch (CredentialStoreException e) { ShowError(what, "Credential Manager: " + e.Message); }
+        catch (Exception e) when (!App.IsFatal(e)) { ShowUnexpected(what, e); }
         finally
         {
             _busy = false;
@@ -164,11 +214,12 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     async Task LoadGuestsAsync(PveClient client, PveServerConfig server)
     {
-        string version = await client.GetVersionAsync();
+        // A token's sign-in already fetched the version (smoke test B6); a password sign-in didn't.
+        string version = client.ServerVersion ?? await client.GetVersionAsync();
         var guests = await client.ListVmsAsync();
         if (SelectedServer?.Config.Id != server.Id) return;
         _guests = guests;
-        Heading.Text = $"{server.DisplayName} · PVE {version} · {client.SignedInAs}";
+        SetHeading(server.DisplayName, $"PVE {version} · {client.SignedInAs}");
         ApplyFilter();
         ShowInfo($"{_guests.Count} guests.", InfoBarSeverity.Informational);
     }
@@ -189,11 +240,15 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     // ---- Servers --------------------------------------------------------------------------------------------------
 
-    async void OnServerSelected(object sender, SelectionChangedEventArgs e)
+    // Every async event handler goes through Guard, so an exception in it is shown and logged (smoke test B1).
+
+    void OnServerSelected(object sender, SelectionChangedEventArgs e) => Guard("Could not list the guests", ServerSelectedAsync);
+
+    async Task ServerSelectedAsync()
     {
         Guests.Clear();
         _guests = [];
-        Heading.Text = SelectedServer?.Name ?? "Guests";
+        SetHeading(SelectedServer?.Name ?? "Guests");
         UpdateButtons();
         if (SelectedServer is not { } item || _loading) return;
         if (_settings.LastServerId != item.Config.Id)
@@ -204,32 +259,35 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         await RunAsync("Could not list the guests", c => LoadGuestsAsync(c, item.Config));
     }
 
-    async void OnServerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => await EditSelectedServerAsync();
+    void OnServerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => Guard("Could not edit the server", EditSelectedServerAsync);
 
-    async void OnRefresh(object sender, RoutedEventArgs e)
+    void OnRefresh(object sender, RoutedEventArgs e) => Guard("Could not list the guests", async () =>
     {
         if (SelectedServer is { } item) await RunAsync("Could not list the guests", c => LoadGuestsAsync(c, item.Config));
-    }
+    });
 
-    async void OnAddServer(object sender, RoutedEventArgs e)
+    void OnAddServer(object sender, RoutedEventArgs e) => Guard("Could not add the server", AddServerAsync);
+
+    async Task AddServerAsync()
     {
         if (_busy) return;
-        var server = await Dialogs.EditServerAsync(Content.XamlRoot, null);
+        var server = await Dialogs.EditServerAsync(Root.XamlRoot, null);
         if (server is null) return;
         _settings.Servers.Add(server);
         SaveSettings();
+        Notice.IsOpen = false; // "Add a Proxmox VE server to begin." is done
         var item = new ServerItem(server);
         Servers.Add(item);
         ServerList.SelectedItem = item;
     }
 
-    async void OnEditServer(object sender, RoutedEventArgs e) => await EditSelectedServerAsync();
+    void OnEditServer(object sender, RoutedEventArgs e) => Guard("Could not edit the server", EditSelectedServerAsync);
 
     async Task EditSelectedServerAsync()
     {
         if (_busy || SelectedServer is not { } item) return;
         var old = item.Config;
-        var edited = await Dialogs.EditServerAsync(Content.XamlRoot, old);
+        var edited = await Dialogs.EditServerAsync(Root.XamlRoot, old);
         if (edited is null) return;
         // A changed address or account makes the saved secret's target name stale: move it along.
         // A different sign-in kind makes the old secret useless (its target differs by kind, so nothing aliases).
@@ -250,11 +308,13 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         ServerList.SelectedItem = replacement;
     }
 
-    async void OnRemoveServer(object sender, RoutedEventArgs e)
+    void OnRemoveServer(object sender, RoutedEventArgs e) => Guard("Could not remove the server", RemoveServerAsync);
+
+    async Task RemoveServerAsync()
     {
         if (_busy || SelectedServer is not { } item) return;
         bool hasSecret = TryReadSecret(_store.TargetFor(item.Config)) is not null;
-        if (!await Dialogs.ConfirmAsync(Content.XamlRoot, $"Remove {item.Name}?",
+        if (!await Dialogs.ConfirmAsync(Root.XamlRoot, $"Remove {item.Name}?",
                 hasSecret ? "The server and its saved credential in Credential Manager are deleted." : "The server is removed from the list.",
                 "Remove"))
             return;
@@ -273,13 +333,15 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         DropClient(item.Config.Id);
         Guests.Clear();
         _guests = [];
-        Heading.Text = item.Name;
+        SetHeading(item.Name);
         LauncherLog.Write($"signed out of {item.Name}");
         ShowInfo($"Signed out of {item.Name}. Refresh signs in again.", InfoBarSeverity.Informational);
         UpdateButtons();
     }
 
-    async void OnForget(object sender, RoutedEventArgs e)
+    void OnForget(object sender, RoutedEventArgs e) => Guard("Could not forget the saved credentials", ForgetAsync);
+
+    async Task ForgetAsync()
     {
         if (_busy || SelectedServer is not { } item) return;
         string target = _store.TargetFor(item.Config);
@@ -288,7 +350,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         try { all = _store.List().Count; }
         catch (CredentialStoreException ex) { ShowError("Credential Manager", ex.Message); return; }
         string kind = item.Config.Auth == PveAuthKind.Token ? "token secret" : "password";
-        var choice = await Dialogs.ForgetAsync(Content.XamlRoot,
+        var choice = await Dialogs.ForgetAsync(Root.XamlRoot,
             has ? $"Delete the saved {kind} for {item.Config.Account} on {item.Name} from Windows Credential Manager?"
                 : $"No {kind} is saved for {item.Config.Account} on {item.Name}.",
             has, all);
@@ -337,18 +399,25 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     void OnGuestSelected(object sender, SelectionChangedEventArgs e) => UpdateButtons();
 
-    async void OnGuestDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => await OpenPrimaryAsync();
+    void OnGuestDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
 
-    async void OnGuestKeyDown(object sender, KeyRoutedEventArgs e)
+    void OnGuestKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key != Windows.System.VirtualKey.Enter) return;
         e.Handled = true;
-        await OpenPrimaryAsync();
+        Guard("Could not open the console", OpenPrimaryAsync);
     }
 
-    void OnGuestContextRequested(UIElement sender, ContextRequestedEventArgs e)
+    /// <summary>
+    /// A right-click (or long press) on a row selects it before the list's menu opens. The handler sits on the row's
+    /// template, not on the list: a handler on the list never ran (presumably its ContextFlyout takes the event
+    /// first), and the menu opened for no row (found in the smoke test re-check). The row is read through
+    /// DependencyObject.GetValue, which needs no projected type beyond what the sender is declared as (0038, AOT).
+    /// The keyboard's menu key opens on the focused row, which a single-selection list has already selected.
+    /// </summary>
+    void OnGuestRowContextRequested(UIElement sender, ContextRequestedEventArgs e)
     {
-        if (e.OriginalSource is FrameworkElement { DataContext: GuestItem guest }) VmList.SelectedItem = guest;
+        if (sender.GetValue(FrameworkElement.DataContextProperty) is GuestItem guest) VmList.SelectedItem = guest;
     }
 
     void OnGuestMenuOpening(object sender, object e)
@@ -359,12 +428,12 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         MenuConsole.IsEnabled = MenuTerminal.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
     }
 
-    async void OnOpenConsole(object sender, RoutedEventArgs e) => await OpenPrimaryAsync();
+    void OnOpenConsole(object sender, RoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
 
-    async void OnOpenTerminal(object sender, RoutedEventArgs e)
+    void OnOpenTerminal(object sender, RoutedEventArgs e) => Guard("Could not open the terminal", async () =>
     {
         if (SelectedGuest is { } g) await OpenTerminalAsync(g);
-    }
+    });
 
     /// <summary>A VM opens its SPICE console in the viewer; a container opens its terminal.</summary>
     async Task OpenPrimaryAsync()
@@ -433,8 +502,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     }
 
     public Task<SecretAnswer?> AskSecretAsync(PveServerConfig server, string? problem, CancellationToken ct) =>
-        OnUi(() => Dialogs.AskSecretAsync(Content.XamlRoot, server, problem));
+        OnUi(() => Dialogs.AskSecretAsync(Root.XamlRoot, server, problem));
 
     public Task<string?> AskSecondFactorAsync(PveServerConfig server, TfaChallenge challenge, string? problem, CancellationToken ct) =>
-        OnUi(() => Dialogs.AskSecondFactorAsync(Content.XamlRoot, server, challenge, problem));
+        OnUi(() => Dialogs.AskSecondFactorAsync(Root.XamlRoot, server, challenge, problem));
 }

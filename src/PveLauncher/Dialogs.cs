@@ -1,3 +1,4 @@
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -18,12 +19,28 @@ static class Dialogs
         DefaultButton = ContentDialogButton.Primary,
     };
 
-    static TextBlock ErrorText() => new()
+    /// <summary>
+    /// A brush from the theme resources, or null. Never a cast: in the Native AOT build a resource's object can come
+    /// back typed only as <c>DependencyObject</c> when its projected class isn't known, and a cast then throws
+    /// before the dialog shows (smoke test B1).
+    /// </summary>
+    static Brush? ThemeBrush(string key)
     {
-        TextWrapping = TextWrapping.Wrap,
-        Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"],
-        Visibility = Visibility.Collapsed,
-    };
+        if (Application.Current.Resources.TryGetValue(key, out object? value) && value is Brush brush) return brush;
+        if (s_fallbackLogged.Add(key)) LauncherLog.Write($"dialogs: theme resource {key} is {value?.GetType().FullName ?? "missing"}, not a brush; using a fallback");
+        return null;
+    }
+
+    static readonly HashSet<string> s_fallbackLogged = [];
+
+    static TextBlock ErrorText()
+    {
+        var text = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
+        // Fallback: WinUI's own SystemFillColorCritical values for the app's theme.
+        text.Foreground = ThemeBrush("SystemFillColorCriticalBrush") ?? new SolidColorBrush(
+            Application.Current.RequestedTheme == ApplicationTheme.Dark ? ColorHelper.FromArgb(0xFF, 0xFF, 0x99, 0xA4) : ColorHelper.FromArgb(0xFF, 0xC4, 0x2B, 0x1C));
+        return text;
+    }
 
     static void Show(TextBlock error, string? text)
     {
@@ -31,12 +48,14 @@ static class Dialogs
         error.Visibility = string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    static TextBlock Note(string text) => new()
+    static TextBlock Note(string text)
     {
-        Text = text,
-        TextWrapping = TextWrapping.Wrap,
-        Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-    };
+        var note = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap };
+        // Fallback: the theme's own text colour, dimmed about as much as TextFillColorSecondary is.
+        if (ThemeBrush("TextFillColorSecondaryBrush") is { } brush) note.Foreground = brush;
+        else note.Opacity = 0.75;
+        return note;
+    }
 
     /// <summary>Adds a server (<paramref name="existing"/> null) or edits a copy of one; null when cancelled.</summary>
     public static async Task<PveServerConfig?> EditServerAsync(XamlRoot root, PveServerConfig? existing)

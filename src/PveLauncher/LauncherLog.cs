@@ -21,8 +21,15 @@ static class LauncherLog
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    /// <summary>Best effort: never throws. The error reporters rely on it, and a full disk or a locked file must
+    /// not stop them from showing the error (review R2).</summary>
     public static void Write(string message)
     {
-        lock (s_gate) s_writer?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [{Environment.ProcessId}] {message}");
+        lock (s_gate)
+        {
+            try { s_writer?.WriteLine($"{DateTime.Now:HH:mm:ss.fff} [{Environment.ProcessId}] {message}"); }
+            // Dropped; the next write tries again.
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or ObjectDisposedException or NotSupportedException) { }
+        }
     }
 }

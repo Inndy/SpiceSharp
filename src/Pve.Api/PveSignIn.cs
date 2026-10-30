@@ -20,16 +20,21 @@ public interface ISignInPrompt
 /// <summary>
 /// The sign-in flow shared by front ends (docs/decisions/0039): use the saved secret if there is one, else ask;
 /// check a token with <c>GET /version</c>; sign in with a password and answer the second factor; save the secret
-/// when the user asked to. Refused secrets are asked for again; network and TLS errors go to the caller.
+/// when the user asked to. Refused secrets are asked for again; network and TLS errors go to the caller and leave the
+/// client signed out.
 /// </summary>
 public static class PveSignIn
 {
     const int MaxSecretAttempts = 5, MaxFactorAttempts = 3;
 
     /// <returns>True when signed in, false when the user cancelled.</returns>
+    /// <remarks>The attempt replaces whatever session the client had: it starts signed out, so a cancelled prompt, a
+    /// failing prompt or credential lookup, or a cancellation leaves no refused token or stale version behind
+    /// (review R4). An accepted sign-in stays accepted if remembering its secret fails.</remarks>
     public static async Task<bool> SignInAsync(PveClient client, PveServerConfig server, CredentialStore? store, ISignInPrompt prompt,
         CancellationToken ct = default)
     {
+        client.SignOut();
         string? target = store?.TargetFor(server);
         string? saved = target is null ? null : store!.Read(target);
         string? problem = null;
@@ -54,14 +59,22 @@ public static class PveSignIn
                         return false;
                     }
                 }
-                if (answer.Remember && target is not null) store!.Write(target, server.Account, answer.Secret);
-                return true;
             }
             catch (PveAuthException e)
             {
                 client.SignOut();
                 problem = fromStore ? "The saved credential was refused; enter it again." : e.Message;
+                continue;
             }
+            catch
+            {
+                // A sign-in that didn't finish (server unreachable, TLS refused, ...) leaves no unchecked token or half
+                // ticket behind, so the client doesn't count as signed in (smoke test B5).
+                client.SignOut();
+                throw;
+            }
+            if (answer.Remember && target is not null) store!.Write(target, server.Account, answer.Secret);
+            return true;
         }
         return false;
     }

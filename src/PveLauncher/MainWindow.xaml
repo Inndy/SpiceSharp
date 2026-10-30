@@ -6,7 +6,7 @@
     xmlns:local="using:PveLauncher"
     Title="PVE Launcher">
 
-    <Grid Padding="12" ColumnSpacing="12">
+    <Grid x:Name="Root" Padding="12" ColumnSpacing="12">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="260" />
             <ColumnDefinition Width="*" />
@@ -62,8 +62,14 @@
                     <ColumnDefinition Width="240" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="Heading" Text="Guests" Style="{StaticResource SubtitleTextBlockStyle}" TextTrimming="CharacterEllipsis" />
-                <TextBox x:Name="Filter" Grid.Column="1" PlaceholderText="Filter by name, VMID or node" TextChanged="OnFilterChanged" />
+                <!-- One line, trimmed (the subtitle style wraps by default); the version and account are smaller. -->
+                <TextBlock x:Name="Heading" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="NoWrap"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                    <Run x:Name="HeadingName" Text="Guests" />
+                    <Run x:Name="HeadingDetail" FontSize="14" FontWeight="Normal" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </TextBlock>
+                <TextBox x:Name="Filter" Grid.Column="1" VerticalAlignment="Center" PlaceholderText="Filter by name, VMID or node"
+                         TextChanged="OnFilterChanged" />
                 <Button x:Name="RefreshButton" Grid.Column="2" Content="Refresh" Click="OnRefresh" IsEnabled="False"
                         ToolTipService.ToolTip="Fetch the list again (F5)">
                     <Button.KeyboardAccelerators>
@@ -80,7 +86,7 @@
                     <ColumnDefinition Width="70" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="120" />
-                    <ColumnDefinition Width="56" />
+                    <ColumnDefinition Width="110" />
                     <ColumnDefinition Width="80" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="VMID" Style="{StaticResource CaptionTextBlockStyle}" />
@@ -91,9 +97,8 @@
             </Grid>
 
             <ListView x:Name="VmList" Grid.Row="3" ItemsSource="{x:Bind Guests}" SelectionMode="Single"
-                      SelectionChanged="OnGuestSelected" DoubleTapped="OnGuestDoubleTapped" KeyDown="OnGuestKeyDown"
-                      ContextRequested="OnGuestContextRequested">
-                <!-- ContextRequested selects the row under the pointer (or the focused row) before this opens. -->
+                      SelectionChanged="OnGuestSelected" DoubleTapped="OnGuestDoubleTapped" KeyDown="OnGuestKeyDown">
+                <!-- The row's ContextRequested selects the row under the pointer before this opens. -->
                 <ListView.ContextFlyout>
                     <MenuFlyout Opening="OnGuestMenuOpening">
                         <MenuFlyoutItem x:Name="MenuConsole" Text="Open SPICE console" Click="OnOpenConsole" />
@@ -102,18 +107,20 @@
                 </ListView.ContextFlyout>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="local:GuestItem">
-                        <Grid ColumnSpacing="8" Opacity="{x:Bind Opacity}">
+                        <!-- Transparent, so a right-click between the columns still hits the row. -->
+                        <Grid ColumnSpacing="8" Opacity="{x:Bind Opacity}" Background="Transparent"
+                              ContextRequested="OnGuestRowContextRequested">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="70" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="120" />
-                                <ColumnDefinition Width="56" />
+                                <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="80" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="{x:Bind Vmid}" VerticalAlignment="Center" />
                             <TextBlock Grid.Column="1" Text="{x:Bind Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             <TextBlock Grid.Column="2" Text="{x:Bind Node}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <TextBlock Grid.Column="3" Text="{x:Bind Type}" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="3" Text="{x:Bind Type}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                             <TextBlock Grid.Column="4" Text="{x:Bind Status}" VerticalAlignment="Center" />
                         </Grid>
                     </DataTemplate>

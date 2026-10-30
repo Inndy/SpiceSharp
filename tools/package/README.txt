@@ -131,7 +131,8 @@ from the folder above it.
                password or token secret of the selected server, or of all servers.
 
 The server list (no passwords) is in data\launcher.json next to SpiceViewer.exe, and the log
-in data\launcher.log, following the same rules as the viewer's settings. Remembered secrets
+in data\launcher.log, following the same rules as the viewer's settings. Errors are shown above
+the list; an unexpected one (a bug) is also written to the log with its details. Remembered secrets
 are in Windows Credential Manager under "SpiceViewer.PVE/...".
 
 The launcher is built on Microsoft's Windows App SDK (WinUI 3), included in PveLauncher\ so

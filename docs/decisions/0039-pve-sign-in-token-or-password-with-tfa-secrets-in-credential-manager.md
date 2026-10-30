@@ -20,6 +20,17 @@
       part may itself contain `@`, as LDAP users do.
     - The secret must be printable ASCII without spaces.
     - `GET /version` checks the token at sign-in.
+    - Amended 2026-10-31 after the smoke test (B5,
+      [../verification/2026-10-31-launcher-smoke.md](../verification/2026-10-31-launcher-smoke.md)): a sign-in that
+      fails for any reason but a refused secret (server unreachable, TLS refused, ...) signs the client out before
+      the error goes to the caller. An unchecked token no longer counts as signed in. A secret the user typed without
+      "Remember" is asked for again on the next try, as after a failed password sign-in.
+    - Amended 2026-10-31 after review R4/R5 ([../reviews/2026-10-31-launcher-smoke-fixes.md](../reviews/2026-10-31-launcher-smoke-fixes.md)):
+      - A sign-in attempt starts by signing the client out, so cancelling the prompt or a failure while reading the
+        saved secret or asking also leaves no refused token behind. Remembering the secret after the server accepted
+        it stays outside this: a failed save doesn't undo the sign-in.
+      - The version kept with a sign-in (`ServerVersion`) is cleared whenever the session ends: sign-out, expiry, a
+        renewal answered with 401, or a 401 on any call.
   - **Password**, read from pve-access-control `src/PVE/API2/AccessControl.pm` (`create_ticket`,
     `create_ticket_do`) and `src/PVE/AccessControl.pm` (`authenticate_user`, `authenticate_2nd_new`,
     `verify_ticket`) at commit dff26b4, pve-common `PVE/Ticket.pm` (`assemble_rsa_ticket`), pve-manager
@@ -68,6 +79,11 @@
     - Calls go through CsWin32 (`CredWriteW`, `CredReadW`, `CredDeleteW`, `CredEnumerateW`, `CredFree`) with
       marshaling off. The secrets in every buffer `CredRead` or `CredEnumerate` returns are cleared before
       `CredFree`.
+    - **Calls take turns** (amended 2026-10-31 after a flaky test). Windows doesn't keep overlapping calls from one
+      process consistent. A write that overlaps another thread's call can be missing from the next read and
+      enumeration and turn up later, and a delete can be undone. So one process-wide lock covers every call, for
+      every store. The launcher's calls already run one at a time on its UI thread; parallel test classes were the
+      ones that overlapped. The lock doesn't cover other processes.
     - Saving is opt-in per sign-in ("Remember in Windows Credential Manager"), and happens only after the server
       accepted the secret.
     - A saved secret is used without asking. If the server refuses it, the user is asked again and the entry stays
@@ -89,6 +105,11 @@
       - the cookie ticket and the CSRF token.
     - Each is matched as sent, URL-escaped and form-encoded, ignoring case.
     - The status code and the rest of the message stay, so errors remain useful.
+    - Amended 2026-10-31 after review R1 ([../reviews/2026-10-31-launcher-smoke-fixes.md](../reviews/2026-10-31-launcher-smoke-fixes.md)):
+      transport errors are redacted the same way. HttpClient's message can quote a malformed answer, for example a
+      header line that echoes the request's `Authorization`. The raw transport exception isn't kept as the inner
+      exception: a log of the whole exception chain would print it unredacted. A broken body keeps only the inner
+      exception's type name.
   - **The sign-in flow is UI-free** (`PveSignIn` with an `ISignInPrompt`), so other front ends ask through their own
     dialogs.
 

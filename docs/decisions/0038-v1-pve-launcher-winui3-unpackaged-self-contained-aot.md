@@ -44,6 +44,12 @@
     - **Native AOT works.** `dotnet publish -r win-x64` and `-r win-arm64` succeed with no trim or AOT warnings
       (2026-10-31, MSVC 14.51 linker, both architectures on the x64 build machine). Bindings are `x:Bind` only (no
       reflection); dialogs are built in code; JSON uses a source-generated context.
+      - Amended 2026-10-31 after the smoke test (B1,
+        [../verification/2026-10-31-launcher-smoke.md](../verification/2026-10-31-launcher-smoke.md)): a WinRT object
+        that arrives as `object` (a resource lookup, an event's `OriginalSource`) is never cast to a projected class.
+        Under AOT it can come back typed only as `DependencyObject` when that class's projection was trimmed, and the
+        cast threw before every dialog. Theme brushes are looked up with a type test and a fallback; other objects are
+        read through members of the type they are declared as (for example `DependencyObject.GetValue`).
     - Measured publish output (2026-10-31, 2.5.1 components, without symbols):
 
       | | Files | Total | `PveLauncher.exe` |
@@ -111,6 +117,32 @@
       in the window, waited for on the process handle.
     - Templates have no console action. VNC consoles are future work (0034); a VM without SPICE shows the server's
       error.
+    - Amended 2026-10-31 after the smoke test (B1–B6,
+      [../verification/2026-10-31-launcher-smoke.md](../verification/2026-10-31-launcher-smoke.md)):
+      - **Unexpected errors are shown and logged, never dropped.** Every `async void` event handler runs its work
+        through one guard. The action runner also catches what isn't an API or Credential Manager error. Whatever
+        still escapes reaches `Application.UnhandledException`. In each case the status bar shows "unexpected error
+        (type: message)", and `launcher.log` gets the type, message and stack trace.
+        - The handler marks the exception handled and the window keeps running: it holds nothing a failed click could
+          corrupt beyond the in-memory session, and a crash would lose the message.
+        - Unobserved task exceptions are logged too, and a fatal one is logged before the process ends.
+        - Exception messages carry no secrets: Pve.Api never puts a secret, ticket or form value into one.
+        - Amended 2026-10-31 after review R2/R3 ([../reviews/2026-10-31-launcher-smoke-fixes.md](../reviews/2026-10-31-launcher-smoke-fixes.md)):
+          - **Fatal failures end the process.** These are out of memory, an access violation and a native SEH fault,
+            and they count even when nested in an inner or aggregated exception. The guard and the action runner
+            don't catch them, and the application, unobserved-task and reporter paths call `Environment.FailFast`
+            after a best-effort log line. Recovery covers ordinary bugs only.
+          - The status bar is updated before the log line. Writing to `launcher.log` never throws. The reporter
+            doesn't re-enter itself, so a full disk or a failing status bar can't set off a cascade of reports.
+      - The caption follows Windows' app mode (`TitleBarTheme.UseDefaultAppMode`), as the content does.
+      - The heading stays on one line, trimmed, with the version and account in smaller text and the whole line in a
+        tooltip.
+      - `GET /version` runs once per sign-in: a token's sign-in check fetches it, and the heading reuses that answer
+        (`PveClient.ServerVersion`). A password sign-in fetches it with the first list. Refresh fetches only the
+        list.
+      - A right-click selects its row before the menu opens. The handler sits on the row template: one on the list
+        itself never ran (the re-check found the menu opening for no row), presumably because the list's own
+        `ContextFlyout` handles the event first.
   - **Limits on each API request** (amended 2026-10-31 after review L3/L4,
     [../reviews/2026-10-31-launcher.md](../reviews/2026-10-31-launcher.md)):
     - one 30-second deadline covers connect, headers and body, so a server that stalls mid-body can't leave the

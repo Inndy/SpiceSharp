@@ -95,3 +95,48 @@ the token is set, even when `/version` never answered (connection refused).
   `cmdkey` and deleted afterwards (`cmdkey /list` shows none). No `.vv` file was written. The fake's key was deleted.
 - Windows' own strings (the connection-refused text, the InfoBar's icon and close-button names) follow the OS display
   language. That is expected.
+
+## Re-check: B1–B6 fixes, 2026-10-31 05:29–05:50
+
+- Build: this branch on top of b16987d. The launcher's own AOT publish (`dotnet publish src/PveLauncher -c Release
+  -r win-x64`) for the step-by-step checks, then `pwsh tools/package.ps1` (win-x64): no warnings in any of the three
+  native compilations, a 31.38 MB zip, 236 files in `PveLauncher\`. The last round ran from the unzipped zip.
+- Same client, method and fake as above: the loopback fake on `127.0.0.1:18006` with a fresh per-run CA, and the
+  refused port `127.0.0.1:8006`. This time the servers were added through the Add dialog, and the token secret was
+  typed into the sign-in prompt with "Remember" ticked, which saved `SpiceViewer.PVE/127.0.0.1:18006/token/...`.
+  "Forget saved…" → "Forget this one" deleted it at the end; `cmdkey /list` shows no `SpiceViewer.PVE/*` entry.
+
+| Check | Result |
+|---|---|
+| B1: Add, Edit, Remove, Forget saved… and the sign-in prompt | **fixed.** Every dialog appears, in the step build and in the zip. Its notes are in the secondary text colour, and the prompt's "Enter the token secret." is in the critical colour. No fallback was logged: once the code names `SolidColorBrush`, the AOT build resolves both theme brushes as brushes. That supports the guess that the class's projection had been trimmed. |
+| B1: the full flow through the dialogs | Add (name, address, API token, token ID, pasted CA PEM) → Save → sign-in prompt → Sign in with Remember → "4 guests." Edit and Remove → Cancel. Remove → Remove deleted the refused server. |
+| B1: unexpected exceptions are visible | Checked with a scratch build that threw on purpose in three places, and was then reverted. A throw in the Add dialog (async handler, guard) showed "Could not add the server / The launcher hit an unexpected error (InvalidCastException: Arg_InvalidCastException)". One in Sign out (sync handler, `Application.UnhandledException`) showed "Unexpected error / … (InvalidOperationException: sync handler test)". One in the sign-in prompt (inside `RunAsync`) showed "Could not list the guests / …" with Sign out disabled. Each was logged as `unexpected: <what>: <type>: <message>` with its stack trace, and the window kept running. |
+| B2: title bar | **fixed.** The caption is dark in dark mode (screenshots, active window). |
+| B3: Type column | **fixed.** "qemu (template)" fits in the 110-DIP column. |
+| B4: heading | **fixed.** "fake (smoke test)" at subtitle size, then "PVE 8.4.1 · smoke-test@pve!launchersmoke" in smaller secondary text, on one line. The filter box keeps its height. In a window 727 DIPs wide, the heading is trimmed to "fake (sm…". |
+| B5: refused server | **fixed.** After "Could not reach 127.0.0.1:8006: …", Sign out is disabled. |
+| B6: `/version` | **fixed.** The fake logged one `GET /version` and one `GET /cluster/resources` per sign-in, over seven sign-ins (7 `/version`, 9 lists). Re-selecting a signed-in server fetched only the list. |
+| Context menu (new finding) | A right-click on a row that wasn't selected opened the menu for no row: both items were disabled, and "Open SPICE console" also showed on a container. The `ContextRequested` handler on the list never ran. It now sits on the row template. Right-clicking the container selects it and shows only "Open terminal", the running VM shows both items enabled, and the template shows both disabled. |
+| Open console on a VM | `POST .../spiceproxy`; the fake's 500 is shown as before. No viewer was started. |
+| Start time, process start to window / to `Add` reachable | 163–351 ms / 243–436 ms in the step build. The first run from the fresh zip took 490 / 564 ms. |
+
+**The idle "+15.6 ms, one tick" after use is not the launcher's code.** Per-thread cycle counts (`QueryThreadCycleTime`
+with thread descriptions and start modules) were taken over 60 s windows, right after a spiceproxy call:
+
+| Window | Cycles in 60 s |
+|---|---|
+| Keep-alive connection still pooled, cursor resting over the window | 10.7 M: `DWM Master Input Thread` (`dwmcorei.dll`) 8.6 M; three pool and COM threads 2.1 M |
+| Pool emptied during the window, cursor over the window | 16.9 M, almost all the DWM input thread |
+| Pool empty, cursor over the window | 10.7 M: DWM input thread 10.7 M, everything else 19 K |
+| Pool empty, cursor moved off the window | 0.12 M |
+
+- The launcher has no timer, delay or polling of its own; the code was checked for each.
+- While the keep-alive connection is pooled, the HTTP pool's cleanup timer and thread-pool threads cost about 2 M
+  cycles (under 1 ms) in its last minute. The connection then closes, as 0038 says. Removing that would mean dropping
+  keep-alive, so a fresh TLS handshake on every action, which costs far more.
+- The rest comes from WinUI's input thread, and only while the cursor rests over the window. That is the likely source
+  of the smoke run's single 15.6 ms tick, since the cursor stayed on the row it had double-clicked. With the cursor
+  elsewhere the process is close to silent. It isn't the launcher's code, and the app can't turn it off.
+
+**Left as found:** in a window about 730 DIPs wide, the Name column shrinks to nothing, since the window has no minimum
+size. The pinned-CA box's header is drawn in Consolas, because the box's font applies to its header too.
