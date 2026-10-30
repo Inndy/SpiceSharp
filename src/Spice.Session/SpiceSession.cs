@@ -29,8 +29,24 @@ public sealed partial class SpiceSession : IAsyncDisposable
     public bool AgentConnected { get; private set; }
     public string? GuestName { get; private set; }
 
-    /// <summary>The primary surface was created, resized or destroyed. Raised under Canvas.Sync.</summary>
+    /// <summary>
+    /// The primary surface was created, resized or destroyed, or the part of it the guest shows as its monitor
+    /// (<see cref="Spice.Canvas.Canvas.PrimaryArea"/>) changed. Raised under Canvas.Sync.
+    /// </summary>
     public event EventHandler? PrimarySurfaceChanged;
+    /// <summary>
+    /// <see cref="DisplayState"/> changed. Raised under Canvas.Sync, on the display thread or (for Waiting) on the thread
+    /// that completes <see cref="ConnectAsync"/>; handlers read the current state when they run (a SURFACE_DESTROY
+    /// followed by a SURFACE_CREATE raises Off then On).
+    /// </summary>
+    public event Action<GuestDisplayState>? DisplayStateChanged;
+
+    int _displayState; // GuestDisplayState
+    bool _displayKnown; // under Canvas.Sync: DISPLAY_MARK or a primary surface seen
+    bool _linked; // under Canvas.Sync: ConnectAsync linked and attached every channel
+
+    /// <summary>Whether the guest has a display to show (docs/decisions/0035). Any thread.</summary>
+    public GuestDisplayState DisplayState => (GuestDisplayState)Volatile.Read(ref _displayState);
     /// <summary>
     /// A primary-surface rectangle changed. Raised under Canvas.Sync, on the display thread, or for a video frame held
     /// for its deadline, on the stream pacing wake's thread-pool thread.
@@ -56,7 +72,11 @@ public sealed partial class SpiceSession : IAsyncDisposable
     {
         _vv = vv;
         _connector = opener ?? new Connector(vv);
-        Canvas.PrimaryChanged += _ => PrimarySurfaceChanged?.Invoke(this, EventArgs.Empty);
+        Canvas.PrimaryChanged += _ =>
+        {
+            PrimarySurfaceChanged?.Invoke(this, EventArgs.Empty);
+            UpdateDisplayState();
+        };
         Canvas.Invalidated += r => Invalidated?.Invoke(r);
         Canvas.CopiedBits += (r, dx, dy) => CopiedBits?.Invoke(r, dx, dy);
     }
@@ -100,6 +120,12 @@ public sealed partial class SpiceSession : IAsyncDisposable
         {
             if (ch is null) { Log.Warn($"{id}: not linked: {err!.Message}"); continue; }
             Attach(ch);
+        }
+        // Linked: a display channel that has said nothing yet is Waiting rather than Pending (docs/decisions/0035).
+        lock (Canvas.Sync)
+        {
+            _linked = true;
+            UpdateDisplayState();
         }
     }
 
@@ -207,6 +233,34 @@ public sealed partial class SpiceSession : IAsyncDisposable
         if (closedByUs) return;
         _channelsList.TrySetException(error ?? new SpiceConnectException(ConnectFailure.Closed, "The server closed the connection."));
         Disconnected?.Invoke(error);
+    }
+
+    /// <summary>
+    /// Under Canvas.Sync: On while there is a primary surface; Off once the server has sent its initial display state
+    /// (DISPLAY_MARK) without one, or destroyed the primary surface without a new one; Waiting when every channel is
+    /// linked and neither has happened (a guest already blank at connect sends no MARK); Pending before.
+    /// </summary>
+    void UpdateDisplayState()
+    {
+        if (Canvas.Primary is not null) _displayKnown = true;
+        var state = Canvas.Primary is not null ? GuestDisplayState.On
+            : _displayKnown ? GuestDisplayState.Off
+            : _linked ? GuestDisplayState.Waiting : GuestDisplayState.Pending;
+        if ((int)state == _displayState) return;
+        Volatile.Write(ref _displayState, (int)state);
+        if (state == GuestDisplayState.Off) Log.Info("display: the guest has no primary surface (its display is off)");
+        else if (state == GuestDisplayState.Waiting) Log.Info("display: linked, no guest display yet");
+        DisplayStateChanged?.Invoke(state);
+    }
+
+    /// <summary>DISPLAY_MARK: the server has sent the display's initial state (spice-gtk shows nothing before it).</summary>
+    void OnDisplayMark()
+    {
+        lock (Canvas.Sync)
+        {
+            _displayKnown = true;
+            UpdateDisplayState();
+        }
     }
 
     // ---------------- main channel ----------------

@@ -18,6 +18,13 @@ Usage
 Proxmox connection files expire about 30-60 seconds after download; open them right away.
 If the file has "delete-this-file=1" it is deleted once read.
 
+If the guest has turned its display off (screen blanking or power saving), the window says
+"The guest's display is off" instead of showing a picture. Press a key that does nothing on its
+own, such as Shift, to wake it. Mouse clicks are not sent until the picture is back, so they
+can't land on something you can't see. Until the guest's display first appears, the window says
+"waiting for the guest's display"; this shows briefly on every connect. If it stays, the guest
+may be asleep: press a key.
+
 Settings and log
 ----------------
 SpiceViewer is portable: it keeps its settings (settings.json) and log (viewer.log) in a "data"

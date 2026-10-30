@@ -19,6 +19,8 @@
     <!-- Exercise the renderer's lifecycle with test-only fake COM types; no viewer project or real device is used. -->
     <Compile Include="../../src/SpiceViewer/Audio/AudioOutput.cs" Link="Audio/AudioOutputUnderTest.cs" />
     <Compile Include="../../src/SpiceViewer/Audio/DeviceNotifications.cs" Link="Audio/DeviceNotificationsUnderTest.cs" />
+    <!-- The window's input gating and guest-area mapping: pure functions, tested without a window. -->
+    <Compile Include="../../src/SpiceViewer/GuestView.cs" Link="Viewer/GuestViewUnderTest.cs" />
   </ItemGroup>
   <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
 </Project>

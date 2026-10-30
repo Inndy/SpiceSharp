@@ -28,7 +28,8 @@ public static class Png
         return c ^ 0xFFFFFFFF;
     }
 
-    public static byte[] Encode(byte[] bgra, int width, int height, int stride)
+    /// <summary>Encodes <paramref name="width"/>×<paramref name="height"/> pixels whose first row starts at byte <paramref name="offset"/>.</summary>
+    public static byte[] Encode(byte[] bgra, int width, int height, int stride, int offset = 0)
     {
         using var raw = new MemoryStream();
         using (var z = new ZLibStream(raw, CompressionLevel.Fastest, leaveOpen: true))
@@ -37,7 +38,7 @@ public static class Png
             for (int y = 0; y < height; y++)
             {
                 line[0] = 0;
-                int s = y * stride;
+                int s = offset + y * stride;
                 for (int x = 0; x < width; x++)
                 {
                     line[1 + x * 3] = bgra[s + x * 4 + 2];

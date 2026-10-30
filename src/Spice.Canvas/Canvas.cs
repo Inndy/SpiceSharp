@@ -36,11 +36,52 @@ public sealed class Canvas : IDisposable
 
     public object Sync { get; } = new();
     public Surface? Primary { get; private set; }
+    /// <summary>
+    /// The part of <see cref="Primary"/> the guest shows as its monitor, in surface pixels: the first head on surface 0 of
+    /// the last DISPLAY_MONITORS_CONFIG, clamped to the surface, or the whole surface when there is none (e.g. a qxl
+    /// surface of 640x512 behind a 640x480 mode). A primary surface recreated at the same size keeps the last head.
+    /// Empty while there is no primary surface. Read under <see cref="Sync"/>.
+    /// See docs/decisions/0035.
+    /// </summary>
+    public SpiceRect PrimaryArea { get; private set; }
+    /// <summary>
+    /// The monitor ID of the head behind <see cref="PrimaryArea"/>, or 0 when the whole surface is shown: the display ID
+    /// absolute mouse positions carry, as spice-gtk sends its shown monitor's ID (a sole head can be #1 after the server
+    /// drops an empty #0). Any thread.
+    /// </summary>
+    public uint PrimaryMonitorId => (uint)Volatile.Read(ref _monitorId);
+    /// <summary>
+    /// Whether <see cref="PrimaryArea"/> comes from a monitors config, rather than being the provisional whole surface
+    /// shown until one arrives after a new primary surface. Read under <see cref="Sync"/>.
+    /// </summary>
+    public bool PrimaryAreaIsMonitor => Primary is not null && _hasHead;
+    int _monitorId;
+    // The head behind PrimaryArea, as sent (a lone head moved to the origin). When the primary surface goes, it is kept
+    // with that surface's size until the next primary surface: one of the same size gets it back (a guest waking its
+    // display sends no new config), one of another size doesn't (a Windows guest growing its mode sends none either,
+    // and the old head would crop the new mode). See docs/decisions/0035.
+    bool _hasHead;
+    MonitorHead _head;
+    bool _hasKeptHead;
+    MonitorHead _keptHead;
+    int _keptWidth, _keptHeight;
+
+    /// <summary>Before the primary surface goes: remembers its head and size for the next primary surface.</summary>
+    void KeepHead()
+    {
+        if (Primary is not { } p) return; // nothing shown: keep what an earlier destroy kept
+        _hasKeptHead = _hasHead;
+        _keptHead = _head;
+        _keptWidth = p.Width; _keptHeight = p.Height;
+    }
     public Dictionary<string, int> Stats { get; } = [];
     /// <summary>Count of commands that could not be applied (bad data or unsupported features).</summary>
     public int Errors { get; private set; }
 
-    /// <summary>Raised (under <see cref="Sync"/>) when a primary surface is created or destroyed.</summary>
+    /// <summary>
+    /// Raised (under <see cref="Sync"/>) when a primary surface is created or destroyed, or when its shown area
+    /// (<see cref="PrimaryArea"/>) changes.
+    /// </summary>
     public event Action<Surface?>? PrimaryChanged;
     /// <summary>Raised (under <see cref="Sync"/>) for each primary-surface rectangle a command changed.</summary>
     public event Action<SpiceRect>? Invalidated;
@@ -109,15 +150,21 @@ public sealed class Canvas : IDisposable
                 Count("surface_create");
                 if (s.IsPrimary)
                 {
+                    KeepHead();
                     Primary = s;
+                    // A primary surface recreated at the size the last head was shown on (a guest waking its display
+                    // sends SURFACE_CREATE and draws, but no MONITORS_CONFIG) gets that head back; any other size starts
+                    // from the whole surface until its config arrives (docs/decisions/0035).
+                    _hasHead = _hasKeptHead && _keptWidth == s.Width && _keptHeight == s.Height;
+                    _head = _keptHead;
+                    _hasKeptHead = false;
+                    PrimaryArea = _hasHead ? AreaOf(_head, s.Width, s.Height) : s.Bounds;
+                    Volatile.Write(ref _monitorId, _hasHead ? (int)_head.Id : 0);
+                    if (_hasHead) Log.Info($"canvas: monitor area {PrimaryArea} kept for the recreated {s.Width}x{s.Height} primary surface");
                     PrimaryChanged?.Invoke(s);
                     Invalidated?.Invoke(s.Bounds);
                 }
-                else if (old is not null && old == Primary)
-                {
-                    Primary = null;
-                    PrimaryChanged?.Invoke(null);
-                }
+                else if (old is not null && old == Primary) ClearPrimary();
                 return;
             }
             case DisplayMsg.SurfaceDestroy:
@@ -126,15 +173,22 @@ public sealed class Canvas : IDisposable
                 if (_surfaces.Remove(id, out var s))
                 {
                     _surfaceBytes -= (long)s.Stride * s.Height;
-                    if (s == Primary)
-                    {
-                        Primary = null;
-                        PrimaryChanged?.Invoke(null);
-                    }
+                    if (s == Primary) ClearPrimary();
                 }
                 return;
             }
-            case DisplayMsg.Mode or DisplayMsg.Mark or DisplayMsg.MonitorsConfig:
+            case DisplayMsg.MonitorsConfig:
+            {
+                // Parsed before anything changes: a malformed message keeps the current area.
+                bool has = DisplayParse.TryPrimaryHead(payload, out var head, out int count);
+                // spice-gtk shows a lone head from the surface's origin, whatever its x/y; its position only places it
+                // among other heads on the same surface.
+                _head = count == 1 ? head with { X = 0, Y = 0 } : head;
+                _hasHead = has;
+                UpdatePrimaryArea();
+                return;
+            }
+            case DisplayMsg.Mode or DisplayMsg.Mark:
                 return;
             case DisplayMsg.Reset:
                 ClearCache();
@@ -162,6 +216,42 @@ public sealed class Canvas : IDisposable
                 Count(s_ignoredKeys.GetOrAdd(type, static t => $"ignored_{t}"));
                 return;
         }
+    }
+
+    void ClearPrimary()
+    {
+        KeepHead();
+        Primary = null;
+        _hasHead = false;
+        PrimaryArea = default;
+        Volatile.Write(ref _monitorId, 0);
+        PrimaryChanged?.Invoke(null);
+    }
+
+    /// <summary>Recomputes <see cref="PrimaryArea"/> from the current head; a change is announced like a new surface.</summary>
+    void UpdatePrimaryArea()
+    {
+        if (Primary is not { } p) return;
+        var area = _hasHead ? AreaOf(_head, p.Width, p.Height) : p.Bounds;
+        // The ID can change without the area (head #1 replacing head #0 at the same size).
+        Volatile.Write(ref _monitorId, _hasHead ? (int)_head.Id : 0);
+        if (area == PrimaryArea) return;
+        PrimaryArea = area;
+        // Logged only when the area changes: once or twice per mode change.
+        Log.Info($"canvas: monitor area {area} of the {p.Width}x{p.Height} primary surface");
+        PrimaryChanged?.Invoke(p);
+    }
+
+    /// <summary>
+    /// A head's rectangle clamped to a <paramref name="width"/>×<paramref name="height"/> surface (spice-gtk intersects
+    /// the same way). A head entirely outside the surface leaves the whole surface shown.
+    /// </summary>
+    public static SpiceRect AreaOf(in MonitorHead head, int width, int height)
+    {
+        long l = Math.Min(head.X, (uint)width), t = Math.Min(head.Y, (uint)height);
+        long r = Math.Min((long)head.X + head.Width, width), b = Math.Min((long)head.Y + head.Height, height);
+        var area = new SpiceRect((int)l, (int)t, (int)r, (int)b);
+        return area.IsEmpty ? new SpiceRect(0, 0, width, height) : area;
     }
 
     void ClearCache()
@@ -736,9 +826,14 @@ public sealed class Canvas : IDisposable
         }
     }
 
-    /// <summary>A PNG of the primary surface (for tests and spice-cli dump).</summary>
+    /// <summary>A PNG of the primary surface's shown area, <see cref="PrimaryArea"/> (for tests and spice-cli dump).</summary>
     public byte[]? SnapshotPrimaryPng()
     {
-        lock (Sync) return Primary is null ? null : Png.Encode(Primary.Pixels, Primary.Width, Primary.Height, Primary.Stride);
+        lock (Sync)
+        {
+            if (Primary is not { } p) return null;
+            var a = PrimaryArea;
+            return Png.Encode(p.Pixels, a.Width, a.Height, p.Stride, a.Top * p.Stride + a.Left * 4);
+        }
     }
 }

@@ -99,7 +99,8 @@ sealed unsafe class Presenter
     ID3D11ShaderResourceView* _guestSrv;
     int _texW, _texH;
     Viewport _vp;
-    int _guestW, _guestH;
+    // The shown area of the guest surface at the last present (docs/decisions/0035): size and offset in the surface.
+    int _guestW, _guestH, _guestX, _guestY;
     int _clearBuffersLeft;
     int _maxDim = Viewport.DefaultMaxDimension;
     bool _occluded;
@@ -191,6 +192,23 @@ sealed unsafe class Presenter
         if (_scroll) AddRect(_pendingPresent, _scrollDest);
         _scroll = _scrollCompanion = false;
         _scrollBlocked = true;
+    }
+
+    /// <summary>A CPU image the presenter shows while the canvas has no primary surface (docs/decisions/0035).</summary>
+    public sealed record Placeholder(byte[] Pixels, int Width, int Height);
+
+    Placeholder? _placeholder;
+
+    /// <summary>
+    /// Shows <paramref name="image"/> (top-down BGRA, Width × 4 bytes per row, never changed afterwards) whenever the
+    /// canvas has no primary surface, through the same upload-and-Present1 path as a guest frame; null shows nothing new.
+    /// A primary surface always takes precedence. Releasing the swap chain instead doesn't work: DWM keeps compositing a
+    /// flip-model swap chain's last frame over the window's GDI painting (finding L5).
+    /// </summary>
+    public void SetPlaceholder(Placeholder? image)
+    {
+        Volatile.Write(ref _placeholder, image);
+        InvalidateAll();
     }
 
     /// <summary>Everything must be re-presented (resize, restore, disconnect overlay).</summary>
@@ -367,9 +385,24 @@ sealed unsafe class Presenter
         System.Drawing.Point scrollOffset = default;
         lock (_canvas.Sync)
         {
-            var surface = _canvas.Primary;
-            if (surface is null) return S_OK;
-            int gw = surface.Width, gh = surface.Height;
+            // Only the guest's monitor area of the surface is shown (docs/decisions/0035). Below, every rectangle is in
+            // area coordinates; Upload reads the source at the area's offset. Without a primary surface, the
+            // placeholder (a message image) is the source, whole.
+            byte[] pixels;
+            int stride, gw, gh, ax, ay;
+            if (_canvas.Primary is { } surface)
+            {
+                var area = _canvas.PrimaryArea;
+                pixels = surface.Pixels; stride = surface.Stride;
+                gw = area.Width; gh = area.Height; ax = area.Left; ay = area.Top;
+            }
+            else if (Volatile.Read(ref _placeholder) is { } placeholder)
+            {
+                pixels = placeholder.Pixels; stride = placeholder.Width * 4;
+                gw = placeholder.Width; gh = placeholder.Height; ax = ay = 0;
+            }
+            else return S_OK;
+            if (gw <= 0 || gh <= 0) return S_OK;
             int cw, ch;
             bool oneToOne;
             SpiceRect scrollDest;
@@ -378,14 +411,14 @@ sealed unsafe class Presenter
             {
                 full = _fullPending || FullFrames;
                 rects.Clear();
-                rects.AddRange(_pending);
+                foreach (var r in _pending) rects.Add(r.Offset(-ax, -ay));
                 presentRects.Clear();
-                presentRects.AddRange(_pendingPresent);
+                foreach (var r in _pendingPresent) presentRects.Add(r.Offset(-ax, -ay));
                 _pending.Clear();
                 _pendingPresent.Clear();
                 _fullPending = false;
                 scroll = _scroll;
-                scrollDest = _scrollDest; scrollDx = _scrollDx; scrollDy = _scrollDy;
+                scrollDest = _scrollDest.Offset(-ax, -ay); scrollDx = _scrollDx; scrollDy = _scrollDy;
                 _scroll = _scrollCompanion = _scrollBlocked = false;
                 cw = _clientW; ch = _clientH; oneToOne = _oneToOne;
                 if (!_layoutSet)
@@ -405,13 +438,13 @@ sealed unsafe class Presenter
                 _context->ClearState();
                 _swapChain->ResizeBuffers(BufferCount, (uint)vp.BufferWidth, (uint)vp.BufferHeight, DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM, SwapChainFlags);
             }
-            if (vp != _vp || gw != _guestW || gh != _guestH)
+            if (vp != _vp || gw != _guestW || gh != _guestH || ax != _guestX || ay != _guestY)
             {
                 if (vp.Direct != _vp.Direct || _vp.BufferWidth == 0)
                     Log.Info($"presenter: {(vp.Direct ? "direct" : "letterbox")} path, buffer {vp.BufferWidth}x{vp.BufferHeight}, guest {gw}x{gh}, client {cw}x{ch}");
                 else
                     Log.Debug($"presenter: layout {vp}");
-                _vp = vp; _guestW = gw; _guestH = gh;
+                _vp = vp; _guestW = gw; _guestH = gh; _guestX = ax; _guestY = ay;
                 _clearBuffersLeft = (int)BufferCount; // letterbox: both flip buffers need the new bars
                 full = true;
             }
@@ -419,7 +452,7 @@ sealed unsafe class Presenter
             else if (EnsureGuestTexture(vp.SourceWidth, vp.SourceHeight)) full = true;
             if (full)
             {
-                rects.Clear(); rects.Add(surface.Bounds);
+                rects.Clear(); rects.Add(new SpiceRect(0, 0, gw, gh));
                 presentRects.Clear();
                 scroll = false;
                 _previous.Clear();
@@ -431,13 +464,14 @@ sealed unsafe class Presenter
             if (vp.Direct)
             {
                 EnsureBackBuffer();
-                fixed (byte* px = surface.Pixels)
+                fixed (byte* px = pixels)
                 {
+                    byte* origin = px + (long)ay * stride + ax * 4;
                     // Flip model with two buffers: this back buffer last held the frame from two presents ago, so it
                     // needs this update's rects and the previous update's. A scroll's destination is among them, so
                     // the buffer is complete whether or not the compositor applies the scroll itself.
-                    foreach (var r in rects) Upload((ID3D11Resource*)_back, px, surface.Stride, r, source);
-                    foreach (var r in _previous) Upload((ID3D11Resource*)_back, px, surface.Stride, r, source);
+                    foreach (var r in rects) Upload((ID3D11Resource*)_back, origin, stride, r, source);
+                    foreach (var r in _previous) Upload((ID3D11Resource*)_back, origin, stride, r, source);
                 }
                 if (!full)
                 {
@@ -470,8 +504,11 @@ sealed unsafe class Presenter
             else
             {
                 scroll = false; // the bars and scaling make the guest's scroll meaningless here
-                fixed (byte* px = surface.Pixels)
-                    foreach (var r in rects) Upload((ID3D11Resource*)_guestTex, px, surface.Stride, r, source);
+                fixed (byte* px = pixels)
+                {
+                    byte* origin = px + (long)ay * stride + ax * 4;
+                    foreach (var r in rects) Upload((ID3D11Resource*)_guestTex, origin, stride, r, source);
+                }
                 var visible = DrawLetterbox(vp, full);
                 if (!full)
                 {
@@ -518,7 +555,10 @@ sealed unsafe class Presenter
         return hr;
     }
 
-    /// <summary>Copies guest rectangle <paramref name="r"/> (clipped to <paramref name="source"/>) into <paramref name="target"/> at the same position.</summary>
+    /// <summary>
+    /// Copies guest rectangle <paramref name="r"/> (area coordinates, clipped to <paramref name="source"/>) into
+    /// <paramref name="target"/> at the same position. <paramref name="pixels"/> points at the area's top-left pixel.
+    /// </summary>
     void Upload(ID3D11Resource* target, byte* pixels, int stride, SpiceRect r, SpiceRect source)
     {
         r = r.Intersect(source);
@@ -927,7 +967,7 @@ sealed unsafe class Presenter
         if (_context is not null) { _context->Release(); _context = null; }
         if (_device is not null) { _device->Release(); _device = null; }
         _vp = default;
-        _guestW = _guestH = 0;
+        _guestW = _guestH = _guestX = _guestY = 0;
         _loggedComposition = false;
     }
 }

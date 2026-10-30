@@ -471,19 +471,36 @@ public readonly struct StreamData
     }
 }
 
+/// <summary>One SpiceHead of DISPLAY_MONITORS_CONFIG, in wire order (spice.proto: monitor_id, surface_id, width, height, x, y, flags).</summary>
 public readonly record struct MonitorHead(uint Id, uint SurfaceId, uint Width, uint Height, uint X, uint Y, uint Flags);
 
 public static class DisplayParse
 {
-    public static MonitorHead[] MonitorsConfig(ReadOnlyMemory<byte> m)
+    /// <summary>Bytes of one SpiceHead on the wire.</summary>
+    public const int MonitorHeadSize = 28;
+    /// <summary>Heads accepted in one DISPLAY_MONITORS_CONFIG (spice-server allows at most 16).</summary>
+    public const int MaxMonitorHeads = 64;
+
+    /// <summary>
+    /// DISPLAY_MONITORS_CONFIG ({u16 count, u16 max_allowed, SpiceHead heads[count]}): the first head on surface 0 with a
+    /// non-zero size, which is the monitor a single-monitor client shows (docs/decisions/0035), and the number of heads
+    /// in the message. False when there is none (no heads, or none on surface 0). Throws <see cref="WireException"/> when
+    /// the message is shorter than its count says or the count is implausible. Reads in place; allocates nothing.
+    /// </summary>
+    public static bool TryPrimaryHead(ReadOnlyMemory<byte> m, out MonitorHead head, out int count)
     {
         var r = new SpiceReader(m);
-        ushort count = r.U16();
+        count = r.U16();
         r.U16(); // max_allowed
-        if (count > 64) throw WireException.BadValue("monitors count", count);
-        var heads = new MonitorHead[count];
-        for (int i = 0; i < count; i++) heads[i] = new MonitorHead(r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32());
-        return heads;
+        if (count > MaxMonitorHeads) throw WireException.BadValue("monitors count", count);
+        if (r.Remaining < count * MonitorHeadSize) throw WireException.Truncated(count * MonitorHeadSize, r.Remaining);
+        for (int i = 0; i < count; i++)
+        {
+            var h = new MonitorHead(r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32(), r.U32());
+            if (h.SurfaceId == 0 && h.Width != 0 && h.Height != 0) { head = h; return true; }
+        }
+        head = default;
+        return false;
     }
 
     /// <summary>INVAL_LIST: (resource type, id) pairs.</summary>

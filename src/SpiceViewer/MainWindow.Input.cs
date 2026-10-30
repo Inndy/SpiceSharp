@@ -21,6 +21,10 @@ sealed unsafe partial class MainWindow
     bool ServerMouse => _session is not null && _session.MouseMode != MouseMode.Client;
 
     /// <summary>Whether system shortcuts (Alt+Tab, Win…) should be captured by the low-level hook right now.</summary>
+    /// <remarks>
+    /// Only while the guest display is shown: with the display off the window shows a message, and Alt+Tab and the Win
+    /// key stay with Windows (plain keys still reach the guest through WM_KEYDOWN, docs/decisions/0035).
+    /// </remarks>
     bool WantHook => _focused && !_released && _state == ViewState.Connected && _shortcuts switch
     {
         ShortcutMode.Always => true,
@@ -110,7 +114,9 @@ sealed unsafe partial class MainWindow
         // Auto-repeat is a down for a key that is already down; hotkeys fire once per physical press.
         bool repeat = down && !_physDown.Add(vk);
         if (!down) _physDown.Remove(vk);
-        if (_session is null || _state != ViewState.Connected) return false;
+        // Keys go to the guest once the session is linked, even before it has a display: that is how a guest whose
+        // display is off is woken (docs/decisions/0035).
+        if (_session is null || !GuestView.KeysToGuest(_state, _linked)) return false;
         if (down && !repeat && CheckHotkeys(vk)) { _hotkeyKeys.Add(vk); return true; }
         if (_hotkeyKeys.Contains(vk)) { if (!down) _hotkeyKeys.Remove(vk); return true; } // repeats and release of a hotkey
         if (_released) return false;
@@ -189,12 +195,11 @@ sealed unsafe partial class MainWindow
 
     // ---------------- mouse ----------------
 
+    /// <summary>A client point as a point in the guest's monitor area (client mouse mode).</summary>
     (int X, int Y) ToGuest(int cx, int cy)
     {
         var g = GuestRect();
-        if (_guestW == 0 || g.Width <= 0 || g.Height <= 0) return (cx, cy);
-        int gx = (int)((long)(cx - g.left) * _guestW / g.Width), gy = (int)((long)(cy - g.top) * _guestH / g.Height);
-        return (Math.Clamp(gx, 0, _guestW - 1), Math.Clamp(gy, 0, _guestH - 1));
+        return GuestView.ClientToGuest(cx, cy, g.left, g.top, g.Width, g.Height, _guestW, _guestH);
     }
 
     HCURSOR CurrentClientCursor()
@@ -264,7 +269,7 @@ sealed unsafe partial class MainWindow
             }
             case PInvoke.WM_SYSCHAR or PInvoke.WM_CHAR:
                 // Alt+key would beep (menu mnemonic search); swallow while the guest owns the keyboard.
-                return !_released && _state == ViewState.Connected;
+                return !_released && _session is not null && GuestView.KeysToGuest(_state, _linked);
 
             case PInvoke.WM_CAPTURECHANGED:
                 // Something else took the mouse (menu, drag, another window): the guest must not keep a button down.
@@ -278,7 +283,7 @@ sealed unsafe partial class MainWindow
             case PInvoke.WM_MOUSEMOVE:
             {
                 // Released input: the guest gets nothing until the recapture click.
-                if (_session is null || _state != ViewState.Connected || _released) return false;
+                if (_session is null || !GuestView.PointerToGuest(_state) || _released) return false;
                 if (ServerMouse) return true; // relative motion comes from WM_INPUT while captured
                 var (gx, gy) = ToGuest(Win32.LoWord(lParam.Value), Win32.HiWord(lParam.Value));
                 _session.MousePosition(gx, gy);
@@ -298,7 +303,8 @@ sealed unsafe partial class MainWindow
                 or PInvoke.WM_MBUTTONDOWN or PInvoke.WM_MBUTTONUP or PInvoke.WM_XBUTTONDOWN or PInvoke.WM_XBUTTONUP
                 or PInvoke.WM_LBUTTONDBLCLK or PInvoke.WM_RBUTTONDBLCLK or PInvoke.WM_MBUTTONDBLCLK or PInvoke.WM_XBUTTONDBLCLK:
             {
-                if (_session is null || _state != ViewState.Connected) return false;
+                // No guest display (or none shown): clicks stay with Windows; see GuestView.PointerToGuest.
+                if (_session is null || !GuestView.PointerToGuest(_state)) return false;
                 bool down = msg is PInvoke.WM_LBUTTONDOWN or PInvoke.WM_RBUTTONDOWN or PInvoke.WM_MBUTTONDOWN or PInvoke.WM_XBUTTONDOWN
                     or PInvoke.WM_LBUTTONDBLCLK or PInvoke.WM_RBUTTONDBLCLK or PInvoke.WM_MBUTTONDBLCLK or PInvoke.WM_XBUTTONDBLCLK;
                 if (_released) { if (down) Recapture(); return true; }
@@ -323,7 +329,7 @@ sealed unsafe partial class MainWindow
             }
             case PInvoke.WM_MOUSEWHEEL:
             {
-                if (_session is null || _state != ViewState.Connected || _released) return false;
+                if (_session is null || !GuestView.PointerToGuest(_state) || _released) return false;
                 _wheelAccum += (short)((wParam.Value >> 16) & 0xFFFF);
                 int notches = _wheelAccum / 120;
                 _wheelAccum -= notches * 120;

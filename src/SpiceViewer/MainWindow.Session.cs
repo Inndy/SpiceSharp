@@ -23,6 +23,7 @@ sealed unsafe partial class MainWindow
         var s = new SpiceSession(_vv);
         _session = s;
         s.PrimarySurfaceChanged += (_, _) => Post(OnPrimaryChanged);
+        s.DisplayStateChanged += _ => Post(OnDisplayStateChanged);
         s.CopiedBits += (r, dx, dy) => _presenter?.CopyBits(r, dx, dy);
         s.Invalidated += r => _presenter?.Invalidate(r);
         s.CursorChanged += c => Post(() => OnCursor(c));
@@ -40,17 +41,31 @@ sealed unsafe partial class MainWindow
     void OnPrimaryChanged()
     {
         if (_session is null || _state == ViewState.Disconnected) return;
-        int w, h;
+        int w, h, x, y;
+        bool provisional;
         lock (_session.Canvas.Sync)
         {
-            var p = _session.Canvas.Primary;
-            if (p is null) return;
-            w = p.Width; h = p.Height;
+            // No primary surface: OnDisplayStateChanged handles that.
+            if (_session.Canvas.Primary is null) return;
+            // Everything the window does follows the guest's monitor area, not the surface behind it (docs/decisions/0035).
+            var area = _session.Canvas.PrimaryArea;
+            w = area.Width; h = area.Height; x = area.Left; y = area.Top;
+            provisional = !_session.Canvas.PrimaryAreaIsMonitor;
         }
         bool first = !_gotFirstFrame;
         bool sizeChanged = w != _guestW || h != _guestH;
-        _guestW = w; _guestH = h;
+        // The first frame can come before its monitors config, showing the whole surface (640x512 for a 640x480 mode)
+        // for a moment. The next notification is then still part of the first frame for window sizing: the window takes
+        // the monitor's size under the first-frame rules, even when the guest follows the window, and a remembered
+        // window keeps its size.
+        bool firstSizing = first || (_firstSizingProvisional && sizeChanged);
+        _firstSizingProvisional = first && provisional;
+        bool wasOff = _state == ViewState.DisplayOff, wasFailed = _state == ViewState.DisplayFailed;
+        _guestW = w; _guestH = h; _guestX = x; _guestY = y;
         _state = ViewState.Connected;
+        // The display is back (or a mode change finished): no "display off" message.
+        _messageTitle = _messageBody = null;
+        _presenter?.SetPlaceholder(null);
         if (_presenter is null)
         {
             try { _presenter = new Presenter(_hwnd, _session.Canvas); }
@@ -63,10 +78,11 @@ sealed unsafe partial class MainWindow
             }
         }
         _gotFirstFrame = true;
-        Log.Info($"guest display {w}x{h}{(first ? $" — first frame {Program.Uptime.ElapsedMilliseconds} ms after start" : "")}");
+        Log.Info($"guest display {w}x{h}{(x != 0 || y != 0 ? $" at ({x},{y})" : "")}" +
+            $"{(first ? $" — first frame {Program.Uptime.ElapsedMilliseconds} ms after start" : wasOff ? " — back on" : "")}");
         // The guest is following the window: don't fight it by resizing the window back. A remembered window keeps
         // its place and size (in 1:1 it still takes the guest's size, in place).
-        if (first) { if (!_restoredPlacement || OneToOneActive) SizeWindowToGuest(center: !_restoredPlacement); }
+        if (firstSizing) { if (!_restoredPlacement || OneToOneActive) SizeWindowToGuest(center: first && !_restoredPlacement); }
         else if (sizeChanged && !GuestFollowsWindow) SizeWindowToGuest(center: false);
         _presenter.InvalidateAll();
         if (first)
@@ -75,7 +91,85 @@ sealed unsafe partial class MainWindow
             if ((_vv.Fullscreen || _restoreFullscreen) && !_fullscreen) ToggleFullscreen();
             OnHostClipboardChanged();
         }
+        else if (wasOff || wasFailed) UpdateKeyboardCapture(); // the hook was removed while there was nothing to show
     }
+
+    /// <summary>
+    /// The guest has no display: at link (Waiting: nothing sent yet, e.g. a guest already blank; or Off: a DISPLAY_MARK
+    /// without a primary surface) or later (Off: the primary surface was destroyed without a new one). The window says so
+    /// instead of "Connecting…" or a frozen frame, and keys keep going to the guest so one can wake it
+    /// (docs/decisions/0035). The way back is <see cref="OnPrimaryChanged"/>. A mode change whose destroy and create are
+    /// handled apart shows the message for those few tens of milliseconds (accepted by the human, decision 0035).
+    /// </summary>
+    void OnDisplayStateChanged()
+    {
+        // Read now: a destroy followed at once by a create (a mode change) is On by the time this runs.
+        if (_session is not { DisplayState: GuestDisplayState.Off or GuestDisplayState.Waiting } s) return;
+        if (_state is ViewState.Connecting or ViewState.Connected or ViewState.DisplayOff) EnterDisplayOff(s.DisplayState);
+    }
+
+    void EnterDisplayOff(GuestDisplayState state)
+    {
+        if (_state == ViewState.Connected)
+        {
+            // Nothing to point at any more: let go of the pointer and any held button. Keys stay as they are, since
+            // they keep going to the guest (their key-ups too).
+            ReleasePointer();
+            _session?.ReleaseAllButtons();
+            if (PInvoke.GetCapture() == _hwnd) PInvoke.ReleaseCapture();
+        }
+        _state = ViewState.DisplayOff;
+        UpdateKeyboardCapture();
+        // Waiting is neutral: every normal connect spends ~0.1 s in it before the first surface (L11, the human's
+        // decision in 0035), so it must not suggest a problem.
+        if (state == GuestDisplayState.Waiting)
+            ShowMessage("Waiting for the guest's display…", "Press a key if the guest is asleep.",
+                "Connected — waiting for the guest's display… (press a key if the guest is asleep).");
+        else
+            ShowMessage("The guest's display is off", "Press a key (Shift) to wake it. Mouse clicks are not sent until the picture is back.",
+                "Connected. The guest's display is off — press a key (Shift) to wake it.");
+        Log.Info($"guest display: {(state == GuestDisplayState.Waiting ? "none yet" : "off")}; keys still go to the guest");
+    }
+
+    // The message shown instead of the guest display, while there is none (null otherwise).
+    string? _messageTitle, _messageBody;
+
+    /// <summary>
+    /// Shows a message instead of the guest display. Before any frame the window paints <paramref name="status"/> with
+    /// GDI. Once a presenter exists, its flip-model swap chain stays composited over GDI painting even after it is
+    /// released (finding L5), so the presenter shows the message instead, as an image drawn at the client size.
+    /// </summary>
+    void ShowMessage(string title, string body, string status)
+    {
+        _messageTitle = title; _messageBody = body;
+        _messageW = _messageH = 0;
+        if (_presenter is null) { SetStatus(status); return; }
+        RenderMessage();
+    }
+
+    int _messageW, _messageH; // the size the message image was last drawn at
+
+    /// <summary>
+    /// (Re)draws the message image for the presenter at the current client size: when shown, and after a resize ends
+    /// (during a drag DXGI stretches the last image). Not at all while there is no message.
+    /// </summary>
+    void RenderMessage()
+    {
+        if (_presenter is null || _messageTitle is null || _messageBody is null || PInvoke.IsIconic(_hwnd)) return;
+        var rc = ClientRect();
+        int w = Math.Max(1, rc.Width), h = Math.Max(1, rc.Height);
+        // Within the device's texture limit; DXGI stretches the image back to the client.
+        while (w > _presenter.MaxDimension || h > _presenter.MaxDimension) { w = Math.Max(1, w / 2); h = Math.Max(1, h / 2); }
+        if (w == _messageW && h == _messageH) return;
+        _messageW = w; _messageH = h;
+        var pixels = new byte[w * h * 4];
+        MemoryMarshal.Cast<byte, uint>(pixels.AsSpan()).Fill(0xFF202020); // the window background
+        DrawText(pixels, w, h, new SpiceRect(0, 0, w, h), _messageTitle, _messageBody);
+        _presenter.SetPlaceholder(new Presenter.Placeholder(pixels, w, h));
+    }
+
+    /// <summary>The first frame showed a whole surface not yet narrowed by its monitors config (see OnPrimaryChanged).</summary>
+    bool _firstSizingProvisional;
 
     CursorShape? _guestShape;
     (double X, double Y) _guestCursorScale;
@@ -138,7 +232,8 @@ sealed unsafe partial class MainWindow
         long p = Interlocked.Read(ref _guestCursorPos);
         int gx = (int)(p >> 32), gy = (int)p;
         var g = GuestRect();
-        var pt = new System.Drawing.Point(g.left + (int)((long)gx * g.Width / _guestW), g.top + (int)((long)gy * g.Height / _guestH));
+        var (px, py) = GuestView.GuestToClient(gx, gy, _guestX, _guestY, g.left, g.top, g.Width, g.Height, _guestW, _guestH);
+        var pt = new System.Drawing.Point(px, py);
         // Never warp the pointer outside the visible image (cropped 1:1).
         var v = VisibleGuestRect();
         pt.X = Math.Clamp(pt.X, v.left, v.right - 1);
@@ -159,12 +254,23 @@ sealed unsafe partial class MainWindow
         OnHostClipboardChanged();
     }
 
+    /// <summary>Every channel is linked: from now on keys reach the guest, whether or not it has a display yet.</summary>
+    internal void OnSessionLinked(SpiceSession s)
+    {
+        Log.Info($"connected: {string.Join(", ", s.OpenChannels)}");
+        if (s != _session) return;
+        _linked = true;
+    }
+
     // ---------------- disconnect and errors ----------------
 
     internal void OnDisconnected(Exception? error)
     {
         if (_state == ViewState.Disconnected) return;
-        bool hadFrame = _gotFirstFrame;
+        // A session that got as far as a picture, or as far as saying the guest's display is off, keeps its window
+        // with the reason and a Close button; one that never got there reports the failure in a dialog.
+        bool displayOff = _state == ViewState.DisplayOff;
+        bool hadFrame = _gotFirstFrame || displayOff;
         _state = ViewState.Disconnected;
         UninstallCapture();
         Log.Info($"disconnected: {error?.Message ?? "closed by server"}");
@@ -194,6 +300,9 @@ sealed unsafe partial class MainWindow
             ("The server's certificate does not match this connection file, so the viewer refused to connect.", c.Message),
         SpiceConnectException { Failure: ConnectFailure.Network } n =>
             ("The server can't be reached. Check your network or VPN connection and try again.", n.Message),
+        // The server ended the connection (L12). No SPICE message names a takeover by another client (DISCONNECTING
+        // carries only a numeric reason; spice-gtk just logs it), so say only what we know.
+        SpiceConnectException { Failure: ConnectFailure.Closed } c => ("The server closed the connection.", c.Message),
         SpiceConnectException c => ("The connection to the virtual machine failed.", c.Message),
         null => ("The virtual machine closed the connection.", null),
         _ => ("The connection to the virtual machine was lost.", e.Message),
@@ -203,6 +312,7 @@ sealed unsafe partial class MainWindow
     void DrawDisconnectedOverlay(string text)
     {
         if (_session is null) return;
+        bool drawn = false;
         lock (_session.Canvas.Sync)
         {
             var s = _session.Canvas.Primary;
@@ -210,9 +320,12 @@ sealed unsafe partial class MainWindow
             {
                 var px = MemoryMarshal.Cast<byte, uint>(s.Pixels.AsSpan());
                 for (int i = 0; i < px.Length; i++) px[i] = ((px[i] >> 2) & 0x3F3F3F) | 0xFF000000;
-                DrawText(s, "Disconnected", text);
+                DrawText(s.Pixels, s.Width, s.Height, _session.Canvas.PrimaryArea, "Disconnected", text);
+                drawn = true;
             }
         }
+        // No frame to draw on (the guest's display was off): show the reason as the message instead.
+        if (!drawn) ShowMessage("Disconnected", text, text);
         _presenter?.InvalidateAll();
         fixed (char* cls = "BUTTON")
         fixed (char* label = "Close")
@@ -236,13 +349,13 @@ sealed unsafe partial class MainWindow
             SET_WINDOW_POS_FLAGS.SWP_NOZORDER | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
     }
 
-    /// <summary>Renders text into a surface with GDI (on a DIB copy of the pixels).</summary>
-    void DrawText(Surface s, string title, string body)
+    /// <summary>Renders text into a top-down BGRA image (a surface or a message image) with GDI (on a DIB copy of the pixels), centered on the shown area.</summary>
+    void DrawText(byte[] pixels, int width, int height, SpiceRect area, string title, string body)
     {
         var bmi = new BITMAPINFO();
         bmi.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
-        bmi.bmiHeader.biWidth = s.Width;
-        bmi.bmiHeader.biHeight = -s.Height;
+        bmi.bmiHeader.biWidth = width;
+        bmi.bmiHeader.biHeight = -height;
         bmi.bmiHeader.biPlanes = 1;
         bmi.bmiHeader.biBitCount = 32;
         void* bits;
@@ -250,24 +363,25 @@ sealed unsafe partial class MainWindow
         if (dib.IsNull) return;
         var dc = PInvoke.CreateCompatibleDC(HDC.Null);
         var oldBmp = PInvoke.SelectObject(dc, dib);
-        new Span<byte>(bits, s.Pixels.Length).Clear();
-        s.Pixels.AsSpan().CopyTo(new Span<byte>(bits, s.Pixels.Length));
+        new Span<byte>(bits, pixels.Length).Clear();
+        pixels.AsSpan().CopyTo(new Span<byte>(bits, pixels.Length));
         PInvoke.SetBkMode(dc, BACKGROUND_MODE.TRANSPARENT);
         PInvoke.SetTextColor(dc, new COLORREF(0x00FFFFFF));
         // Size text to the guest resolution so it reads well once scaled to the window.
-        var big = MakeFont(-Math.Max(18, s.Height / 22), 600);
-        var small = MakeFont(-Math.Max(12, s.Height / 45), 400);
+        int ax = area.Left, ay = area.Top, aw = area.Width, ah = area.Height;
+        var big = MakeFont(-Math.Max(18, ah / 22), 600);
+        var small = MakeFont(-Math.Max(12, ah / 45), 400);
         var oldFont = PInvoke.SelectObject(dc, big);
-        var r1 = new RECT(0, s.Height / 2 - s.Height / 10, s.Width, s.Height / 2 - s.Height / 40);
+        var r1 = new RECT(ax, ay + ah / 2 - ah / 10, ax + aw, ay + ah / 2 - ah / 40);
         fixed (char* t = title) PInvoke.DrawText(dc, t, title.Length, ref r1, DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_BOTTOM | DRAW_TEXT_FORMAT.DT_SINGLELINE | DRAW_TEXT_FORMAT.DT_NOPREFIX);
         PInvoke.SelectObject(dc, small);
-        var r2 = new RECT(s.Width / 10, s.Height / 2 - s.Height / 50, s.Width * 9 / 10, s.Height / 2 + s.Height / 12);
+        var r2 = new RECT(ax + aw / 10, ay + ah / 2 - ah / 50, ax + aw * 9 / 10, ay + ah / 2 + ah / 12);
         fixed (char* t = body) PInvoke.DrawText(dc, t, body.Length, ref r2, DRAW_TEXT_FORMAT.DT_CENTER | DRAW_TEXT_FORMAT.DT_WORDBREAK | DRAW_TEXT_FORMAT.DT_NOPREFIX);
         PInvoke.SelectObject(dc, oldFont);
         PInvoke.DeleteObject(big);
         PInvoke.DeleteObject(small);
-        new Span<byte>(bits, s.Pixels.Length).CopyTo(s.Pixels);
-        var px = MemoryMarshal.Cast<byte, uint>(s.Pixels.AsSpan());
+        new Span<byte>(bits, pixels.Length).CopyTo(pixels);
+        var px = MemoryMarshal.Cast<byte, uint>(pixels.AsSpan());
         for (int i = 0; i < px.Length; i++) px[i] |= 0xFF000000; // GDI clears alpha where it draws
         PInvoke.SelectObject(dc, oldBmp);
         PInvoke.DeleteDC(dc);
@@ -375,7 +489,7 @@ static class SessionStarter
         try
         {
             await s.ConnectAsync(ct);
-            window.Post(() => Log.Info($"connected: {string.Join(", ", s.OpenChannels)}"));
+            window.Post(() => window.OnSessionLinked(s));
         }
         catch (Exception e) { window.Post(() => window.OnDisconnected(e)); }
     });

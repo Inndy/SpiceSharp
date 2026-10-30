@@ -12,12 +12,6 @@ using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace SpiceViewer;
 
-/// <summary>
-/// <see cref="ViewState.DisplayFailed"/>: the session is up but the presenter stopped; input is released and not forwarded (the
-/// user can't see the guest). A new guest display (OnPrimaryChanged) tries a new presenter and returns to Connected.
-/// </summary>
-enum ViewState { Connecting, Connected, Disconnected, DisplayFailed }
-
 /// <summary>The viewer window: plain Win32, a flip-model swap chain once the guest display exists.</summary>
 sealed unsafe partial class MainWindow
 {
@@ -43,7 +37,11 @@ sealed unsafe partial class MainWindow
     ViewState _state = ViewState.Connecting;
     string _status;
     bool _gotFirstFrame;
-    int _guestW, _guestH;
+    /// <summary>Every channel is linked (ConnectAsync returned): keys may go to the guest even before it has a display.</summary>
+    bool _linked;
+    // The guest's monitor area of the primary surface (docs/decisions/0035): the size everything in the window follows,
+    // and its offset in the surface (cursor-channel positions are in surface pixels).
+    int _guestW, _guestH, _guestX, _guestY;
     ScalingMode _scaling = ScalingMode.Fit;
     ShortcutMode _shortcuts = ShortcutMode.Always;
     bool _resizeGuest = true;
@@ -190,6 +188,7 @@ sealed unsafe partial class MainWindow
             case PInvoke.WM_EXITSIZEMOVE:
                 _sizingByUser = false;
                 RequestGuestResize();
+                RenderMessage(); // during the drag DXGI stretched the old message image
                 return default;
             case PInvoke.WM_GETMINMAXINFO:
             {
@@ -216,7 +215,7 @@ sealed unsafe partial class MainWindow
                 OnTimer(wParam.Value);
                 return default;
             case PInvoke.WM_SETCURSOR:
-                if ((lParam.Value & 0xFFFF) == PInvoke.HTCLIENT && _state == ViewState.Connected)
+                if ((lParam.Value & 0xFFFF) == PInvoke.HTCLIENT && GuestView.PointerToGuest(_state))
                 {
                     PInvoke.SetCursor(CurrentClientCursor());
                     return (LRESULT)1;
@@ -326,7 +325,10 @@ sealed unsafe partial class MainWindow
             // Keys and clicks must not keep going to a guest the user can't see: leaving Connected stops all
             // forwarding (and the hook, via WantHook); let go of everything already held in the guest.
             // A new presenter is tried when the guest display changes next.
-            if (_state == ViewState.Connected) _state = ViewState.DisplayFailed;
+            // DisplayOff (and Waiting) too: since decision 0035 the presenter outlives a blanked display to show the
+            // message, and keys must stop there as well (review M3). A disconnected window stays disconnected.
+            if (_state != ViewState.Disconnected) _state = ViewState.DisplayFailed;
+            _messageTitle = _messageBody = null; // the failure text below replaces any display-off message
             CancelGuestInput();
             UpdateKeyboardCapture();
             if (_fullscreen) { _fullscreenWhenEnded = true; ToggleFullscreen(); }
@@ -407,11 +409,14 @@ sealed unsafe partial class MainWindow
         bool minimized = kind == PInvoke.SIZE_MINIMIZED;
         _presenter?.SetSuspended(minimized);
         if (minimized) return;
+        // The GDI-painted status (no presenter: "Connecting…", waiting, a failed display) is centred on the client
+        // area: lay it out again (finding L10). With a presenter nothing is painted with GDI, so nothing is invalidated.
+        if (_presenter is null) PInvoke.InvalidateRect(_hwnd, (RECT?)null, false);
         PushLayout();
         PositionCloseButton();
         UpdateCursorClip();
         // Maximize/restore/snap don't go through WM_EXITSIZEMOVE.
-        if (!_sizingByUser) RequestGuestResize();
+        if (!_sizingByUser) { RequestGuestResize(); RenderMessage(); }
         else if (GuestFollowsWindow) PInvoke.SetTimer(_hwnd, TimerGuestResize, 300, null);
     }
 
@@ -425,7 +430,10 @@ sealed unsafe partial class MainWindow
 
     int _lastRequestW, _lastRequestH;
 
-    /// <summary>With the agent, the guest takes the window's size so output stays 1:1.</summary>
+    /// <summary>
+    /// With the agent, the guest takes the window's size so output stays 1:1. Compared with the guest's monitor area, not
+    /// its surface: a qxl surface can be taller than the mode it holds (docs/decisions/0035).
+    /// </summary>
     void RequestGuestResize()
     {
         if (!GuestFollowsWindow || _state != ViewState.Connected || PInvoke.IsIconic(_hwnd)) return;

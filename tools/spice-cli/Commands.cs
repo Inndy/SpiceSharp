@@ -70,14 +70,25 @@ static class Commands
         await session.ConnectAsync(CancellationToken.None);
         if (await Task.WhenAny(gotSurface.Task, Task.Delay(10000)) != gotSurface.Task)
         {
-            Console.Error.WriteLine("no primary surface within 10 s");
+            Console.Error.WriteLine(session.DisplayState == GuestDisplayState.Off
+                ? "the guest's display is off (no primary surface); wake the guest and try again"
+                : "no primary surface within 10 s");
             return 1;
         }
         await Task.Delay(TimeSpan.FromSeconds(seconds));
+        // The PNG holds the guest's monitor area of the surface (docs/decisions/0035).
         var png = session.Canvas.SnapshotPrimaryPng();
         if (png is null) { Console.Error.WriteLine("no primary surface"); return 1; }
         await File.WriteAllBytesAsync(outPath, png);
-        Console.WriteLine($"wrote {outPath} ({session.Canvas.Primary!.Width}x{session.Canvas.Primary.Height}, {updates} updates)");
+        string size;
+        lock (session.Canvas.Sync)
+        {
+            var area = session.Canvas.PrimaryArea;
+            var p = session.Canvas.Primary;
+            size = p is null || (area.Width == p.Width && area.Height == p.Height) ? $"{area.Width}x{area.Height}"
+                : $"{area.Width}x{area.Height} of a {p.Width}x{p.Height} surface";
+        }
+        Console.WriteLine($"wrote {outPath} ({size}, {updates} updates)");
         foreach (var (k, v) in session.Canvas.Stats.OrderBy(kv => kv.Key)) Console.WriteLine($"  {k}: {v}");
         return 0;
     }

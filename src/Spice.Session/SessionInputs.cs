@@ -13,6 +13,7 @@ public sealed partial class SpiceSession
     bool _pendingMotion, _pendingIsPosition;
     int _pendDx, _pendDy;
     uint _pendX, _pendY;
+    byte _pendDisplay; // the monitor the pending position is relative to
 
     public LockKeys? GuestLockKeys { get; private set; }
 
@@ -96,13 +97,18 @@ public sealed partial class SpiceSession
         _inputs?.Send(InputsMsg.CKeyModifiers, b[..ClientMsg.KeyModifiers(b, keys)]);
     }
 
-    /// <summary>Client mouse mode: absolute position in primary-surface coordinates.</summary>
+    /// <summary>
+    /// Client mouse mode: absolute position relative to the shown monitor (<see cref="Spice.Canvas.Canvas.PrimaryArea"/>),
+    /// sent with that monitor's ID (<see cref="Spice.Canvas.Canvas.PrimaryMonitorId"/>), as spice-gtk does.
+    /// </summary>
     public void MousePosition(int x, int y)
     {
         if (_inputs is null) return;
         lock (_inputLock)
         {
             _pendX = (uint)Math.Max(0, x); _pendY = (uint)Math.Max(0, y);
+            // display_id is a u8 on the wire; spice-server allows at most 16 heads.
+            _pendDisplay = (byte)Math.Min(Canvas.PrimaryMonitorId, byte.MaxValue);
             _pendingIsPosition = true; _pendingMotion = true;
             if (_motionInFlight < MaxMotionInFlight) SendPendingMotion();
         }
@@ -125,7 +131,7 @@ public sealed partial class SpiceSession
     {
         Span<byte> b = stackalloc byte[16];
         if (_pendingIsPosition)
-            _inputs!.Send(InputsMsg.CMousePosition, b[..ClientMsg.MousePosition(b, _pendX, _pendY, _buttons, 0)]);
+            _inputs!.Send(InputsMsg.CMousePosition, b[..ClientMsg.MousePosition(b, _pendX, _pendY, _buttons, _pendDisplay)]);
         else
             _inputs!.Send(InputsMsg.CMouseMotion, b[..ClientMsg.MouseMotion(b, _pendDx, _pendDy, _buttons)]);
         _pendDx = _pendDy = 0;

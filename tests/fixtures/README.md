@@ -56,14 +56,15 @@ wallpaper and the desktop's Home icon, no account name. 1.1 MB in all.
 
 Also surface_create=1. The guest ran at 640x480 at the time; the qxl primary
 surface is 640x512 and SPICE_MSG_DISPLAY_MONITORS_CONFIG names the 640x480
-monitor, which the canvas doesn't apply, so the bottom 32 rows stay black (finding
-L2 of docs/verification/2026-10-30-ubuntu.md). Every draw is a full-frame
+monitor. The first candidate golden showed the whole surface, with the bottom 32
+rows black (finding L2 of docs/verification/2026-10-30-ubuntu.md); since
+docs/decisions/0035 the canvas shows the monitor, so replays and the candidate are
+640x480 with no black band (`MonitorAreaTests`). Every draw is a full-frame
 DrawCopy: the first LZ, every later one GLZ. The guest sent no QUIC, CopyBits or
 video stream, so QUIC remains covered by the Windows fixtures only and milestone 2's
 "a Linux guest recording covering QUIC" isn't met by this capture.
 
-**Golden pending:** `ubuntu-rich` has no golden.png yet; the candidate awaits the
-human's approval. Until then `ReplayMatchesRecordedStats` checks it (zero errors,
-surface size and every canvas counter equal to the live `session.json`, LZ and GLZ
-present); `DesktopMatchesGolden` lists it once the golden is approved. The same
-stats test runs over the four Windows fixtures.
+**Golden:** the human approved `ubuntu-rich`'s golden.png on 2026-10-30. It is the 640x480 monitor area
+(decision 0035), with no black band, and `DesktopMatchesGolden` checks it. `ReplayMatchesRecordedStats`
+also checks every fixture: zero errors, and the surface size and every canvas counter equal to the
+live `session.json`.

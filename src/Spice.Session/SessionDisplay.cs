@@ -269,6 +269,7 @@ public sealed partial class SpiceSession
                 // Draw commands apply at once, even over a stream frame still waiting for its deadline; that frame is
                 // drawn over them when it comes due (spice-gtk has the same ordering). See docs/decisions/0025.
                 Canvas.Apply(type, m);
+                if (type == DisplayMsg.Mark) OnDisplayMark();
                 break;
         }
     }

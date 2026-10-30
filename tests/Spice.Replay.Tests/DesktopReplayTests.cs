@@ -12,7 +12,7 @@ public sealed class DesktopReplayTests(ITestOutputHelper output)
     [InlineData("win81-desktop")]
     [InlineData("win7-rich")]
     [InlineData("win81-rich")]
-    // ubuntu-rich joins this list once the human approves its golden.png (tests/fixtures/README.md).
+    [InlineData("ubuntu-rich")]
     public async Task DesktopMatchesGolden(string name)
     {
         string root = AppContext.BaseDirectory;
