@@ -13,6 +13,24 @@ choice is between two of these goals, the higher one wins. The spec's MUST rules
 3. **Small binaries.** Shrink the exe and DLLs (trimmed exports, dead-code elimination, no unused dependencies), but
    never at the cost of the two goals above: no size optimisation that makes a hot path slower.
 
+## Transparency and flexibility
+
+The human's philosophy for building software (2026-10-30). The priorities above rank trade-offs; these values
+shape every choice.
+
+- **Transparency.** Prefer components whose source we can read, build ourselves and debug. A component should have
+  documented behaviour that we can pin to a version. Avoid opaque binaries, and avoid OS or third-party components
+  whose behaviour we can't inspect when an open option does the job. The same goes for our own work:
+  - choices are written down in [decisions/](../decisions/README.md);
+  - measurements are recorded;
+  - logs say what happened;
+  - limitations are stated, not hidden.
+- **Flexibility.** Put clear seams between layers (transport, protocol, codec, renderer, UI) so that any one of them
+  can be replaced. Don't lock users or the code into one host application, UI framework or vendor. The viewer
+  works standalone and can also be hosted by another program.
+  - Where users already have a tool they like, let them choose it. For example, the v1 terminal will have a built-in
+    VT, and users will also be able to use their own terminal program.
+
 ## Opt in to the newest hardware and APIs, aggressively
 
 - Actively adopt new ISA extensions and Windows/graphics APIs wherever they measurably help, for example newer SIMD

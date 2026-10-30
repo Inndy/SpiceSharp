@@ -40,3 +40,6 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0029](0029-vendored-codec-patches-allowed-with-differential-verification.md) | Vendored codec patches are allowed when a differential test proves them (human, 2026-10-30) |
 | [0030](0030-clock-pacing-holds-audio-to-the-guest-clock.md) | Clock pacing holds audio to the guest clock by packet timestamps (human asked for A/V sync, 2026-10-30) |
 | [0031](0031-the-audio-stream-outlives-its-output-device.md) | The audio stream outlives its output device (human approved the design, 2026-10-30) |
+| [0032](0032-zig-is-allowed-as-a-build-only-tool.md) | Zig is allowed as a build-only tool for vendored native libraries (human, 2026-10-30) |
+| [0033](0033-pve-api-tls-pins-a-given-ca-else-uses-system-trust.md) | The PVE API client pins a given CA, otherwise uses the system trust roots (human, 2026-10-30) |
+| [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30) |
