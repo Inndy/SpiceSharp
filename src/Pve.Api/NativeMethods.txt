@@ -1,0 +1,9 @@
+// Windows Credential Manager (CredentialStore.cs)
+CredWrite
+CredRead
+CredDelete
+CredEnumerate
+CredFree
+CREDENTIALW
+CRED_TYPE
+CRED_PERSIST

@@ -45,5 +45,7 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30) |
 | [0035](0035-guest-display-off-takes-keys-and-the-monitor-area-is-shown.md) | A guest without a display says so and takes keys; the viewer shows the guest's monitor, not its whole surface |
 | [0036](0036-v1-terminal-bridge-to-the-users-terminal-first.md) | v1 terminal: bridge to the user's terminal first; byte-transparent console bridge, pipe hand-off, keep-alive policy (human, 2026-10-30) |
+| [0038](0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md) | The v1 PVE launcher: WinUI 3, unpackaged, self-contained, Native AOT; a separate process per console (human, 2026-10-31) |
+| [0039](0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md) | PVE sign-in: an API token or a password with TOTP; secrets in Credential Manager (human, 2026-10-31) |
 | [0040](0040-viewers-sharing-a-data-folder-append-whole-lines-to-one-log.md) | Viewers sharing a data folder append whole lines to one viewer.log |
 | [0041](0041-idle-memory-is-trimmed-on-minimize-and-video-end.md) | Idle memory is trimmed when the window is minimized and when the last video stream ends (agent, spec silent, not yet reviewed) |

@@ -29,9 +29,9 @@ committed file under `native/` as `source\native`, the complete source and build
 
 | Component | In | License | Text from |
 |---|---|---|---|
-| SpiceViewer | exe, codec bridge in spicecodec.dll | MIT | `LICENSE` |
-| .NET runtime (Native AOT) | exe | MIT and its third-party notices | `dotnet-runtime-MIT.txt`; the ILCompiler package's `THIRD-PARTY-NOTICES.TXT` from NuGet |
-| CsWin32 (generated interop code) | exe | MIT | `cswin32-MIT.txt` |
+| SpiceViewer, PveTerm, PveLauncher | the exes, codec bridge in spicecodec.dll | MIT | `LICENSE` |
+| .NET runtime (Native AOT) | the exes | MIT and its third-party notices | `dotnet-runtime-MIT.txt`; the ILCompiler package's `THIRD-PARTY-NOTICES.TXT` from NuGet |
+| CsWin32 (generated interop code) | the exes | MIT | `cswin32-MIT.txt` |
 | SpiceSee codec bridge and shims | spicecodec.dll | MIT | `native/LICENSE.SpiceSee` |
 | spice-common, spice-gtk decoders | spicecodec.dll | LGPL-2.1-or-later | `native/LICENSE.LGPL-2.1` |
 | FastLZ | spicecodec.dll | MIT | `fastlz-MIT.txt` (from `lz.c`'s header) |
@@ -41,6 +41,16 @@ committed file under `native/` as `source\native`, the complete source and build
 | lz4 (block decoder, `lib/lz4.c`) | spicecodec.dll | BSD-2-Clause | `lib/LICENSE` from the pinned download |
 | MinGW-w64 runtime (static) | all three DLLs | ZPL-2.1 and others | `mingw-w64-runtime.txt` |
 | LLVM compiler-rt builtins (static) | all three DLLs | Apache-2.0 WITH LLVM-exception | `llvm-compiler-rt.txt` |
+| Windows App SDK 2.5.1 components (WinUI 2.3.9, Foundation 2.3.12, InteractiveExperiences 2.1.9, Base 2.0.4; self-contained) | `PveLauncher\` except the exe and WebView2 files | Microsoft Software License Terms (distributable code) and third-party notices | `license.txt` and `NOTICE.txt` of `Microsoft.WindowsAppSDK.WinUI`, `NOTICE.txt` of `Microsoft.WindowsAppSDK.Base`, from NuGet |
+| WebView2 SDK (brought in by WinUI; unused) | `PveLauncher\WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll` | BSD-3-Clause (Microsoft) | `LICENSE.txt` and `NOTICE.txt` of `Microsoft.Web.WebView2` from NuGet |
+| C#/WinRT runtime (`WinRT.Runtime`) | `PveLauncher.exe` | MIT | `cswinrt-MIT.txt` |
+| Windows SDK .NET projection (`Microsoft.Windows.SDK.NET.Ref`) | `PveLauncher.exe` | Microsoft Windows SDK license terms | the package has only a link (https://aka.ms/WinSDKLicenseURL); the text is `sdk_license.txt` of `Microsoft.Windows.SDK.Win32Metadata` (restored for CsWin32), from NuGet |
+
+The last four come only with the v1 launcher ([decisions/0038](../docs/decisions/0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md));
+`tools/package.ps1 -NoLauncher` leaves them, `PveTerm.exe` and `PveLauncher\` out. The Windows App SDK is not free
+software: its terms allow redistribution with an app and ask that end users accept terms that protect it at least
+as well, which `LICENSE.txt` states before the component list. Its versions are read from the launcher's
+`project.assets.json`, so the texts match what was published.
 
 The toolchain texts were copied from MSYS2 `clang64/share/licenses` (crt 14.0.0.r426, compiler-rt 22.1.8). Refresh
 them when the toolchain changes what it links statically. Check with `llvm-objdump -p` that the DLLs import only

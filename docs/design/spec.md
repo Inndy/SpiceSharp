@@ -272,7 +272,7 @@ v0 connects from `.vv` data alone. The PVE API belongs to the optional v1 launch
 
 **v1 launcher (optional)**
 
-- Authenticate with a PVE API token: `Authorization: PVEAPIToken=USER@REALM!TOKENID=SECRET`, privilege `VM.Console`. Store tokens in Windows Credential Manager.
+- Authenticate with a PVE API token (`Authorization: PVEAPIToken=USER@REALM!TOKENID=SECRET`, privilege `VM.Console`), or with a user name and password through `POST /api2/json/access/ticket`, including the TOTP second factor; keep the ticket and CSRF token in memory only and renew them before their 2-hour end. Store token secrets and, when the user asks, passwords in Windows Credential Manager, and let the user forget them ([decisions/0039](../decisions/0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md), human 2026-10-31).
 - List VMs with `GET /api2/json/cluster/resources?type=vm`.
 - Fetch connection data with `POST /api2/json/nodes/{node}/qemu/{vmid}/spiceproxy`, then pass it to the viewer through `--vv-stdin`.
 

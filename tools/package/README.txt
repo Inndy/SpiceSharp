@@ -75,6 +75,46 @@ Image compression (window menu, saved for all VMs):
                               if the server supports it; going back to "Server default"
                               takes effect from the next connection.
 
+PVE launcher (PveLauncher\PveLauncher.exe)
+------------------------------------------
+Lists the VMs and containers of a Proxmox VE server and opens them, so you don't download a
+.vv file each time. Run PveLauncher\PveLauncher.exe; it uses SpiceViewer.exe and PveTerm.exe
+from the folder above it.
+
+  Add          a server: its address (https://host:8006; 8006 is assumed if you give no port),
+               and either a user name and realm (pam, pve, ...) for password sign-in, or an
+               API token ID (user@realm!tokenname). The token needs the VM.Console privilege.
+  CA           optional. Paste the PVE CA certificate (PEM, /etc/pve/pve-root-ca.pem on any
+               node) to trust that CA and nothing else. Leave it empty if the server has a
+               certificate Windows already trusts (for example from Let's Encrypt). The
+               server's name must match its certificate either way.
+  Sign in      the password or token secret is asked for when you first connect. Tick
+               "Remember in Windows Credential Manager" to keep it there (never in a file).
+               Accounts with two-factor authentication are asked for the authenticator
+               app's code (TOTP) or a recovery key; WebAuthn and U2F keys are not supported.
+               A session stays signed in while you use it; after about 1 h 40 min without
+               use, the next action signs in again (with a remembered password, only the
+               code is asked for).
+  Open console double-click a VM, press Enter or click "Open console": its SPICE console opens
+               in SpiceViewer. The connection data goes to the viewer through a pipe, never
+               a file. A VM that is stopped or has no SPICE display shows the server's error.
+  Terminal     "Open terminal" (or right-click) opens a VM's serial console, and a container's
+               console, in your terminal through PveTerm.exe. Choose where at the bottom
+               right: the default terminal app, a Windows Terminal tab, or the classic
+               console window. In the terminal, type ~. at the start of a line to leave
+               (~? lists the escapes).
+  Refresh      F5 or the Refresh button. The list does not update by itself.
+  Sign out     forgets the session in memory. "Forget saved..." deletes the remembered
+               password or token secret of the selected server, or of all servers.
+
+The server list (no passwords) is in data\launcher.json next to SpiceViewer.exe, and the log
+in data\launcher.log, following the same rules as the viewer's settings. Remembered secrets
+are in Windows Credential Manager under "SpiceViewer.PVE/...".
+
+The launcher is built on Microsoft's Windows App SDK (WinUI 3), included in PveLauncher\ so
+nothing needs installing. Those files are under Microsoft's license terms, not the MIT License;
+see LICENSE.txt. The viewer and PveTerm.exe don't use them.
+
 Guest tools
 -----------
 Install spice-guest-tools (https://www.spice-space.org/download.html) in Windows guests for
@@ -95,6 +135,9 @@ Files
                              build scripts are in source\native.
   turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
   opus.dll                   libopus (BSD-3-Clause)
+  PveTerm.exe                Proxmox text consoles in your terminal, started by the launcher (MIT)
+  PveLauncher\               the PVE launcher (PveLauncher.exe, MIT) and the Windows App SDK files
+                             it needs (Microsoft's license terms)
   LICENSE.txt                licenses of this program and of every component in this package
   source\native\             complete source and build scripts of the native DLLs
-  data\                      settings.json and viewer.log (created on first run)
+  data\                      settings.json, launcher.json and the logs (created on first run)

@@ -134,6 +134,9 @@
     question 6).
   - **Ships:** not in the v0 zip yet, because there is no launcher. The dev helper (`tools/pve-vv.py --term`) plays
     the launcher's part. Usage is in [../../src/PveTerm/README.md](../../src/PveTerm/README.md).
+    Amended 2026-10-31: the v1 launcher ([0038](0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md)) now
+    exists, and `tools/package.ps1` puts `PveTerm.exe` in the zip with it (`-NoLauncher` leaves both out). That is
+    the "with the v1 launcher" answer to open question 1, pending the human's confirmation.
   - **Deferred:**
     - the built-in VT (libghostty-vt, [0032](0032-zig-is-allowed-as-a-build-only-tool.md)) behind `ITermChannel`;
     - mintty, and a user command template for other terminals;

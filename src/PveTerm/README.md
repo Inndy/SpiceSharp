@@ -5,8 +5,9 @@ it runs in, so the user's own terminal shows it. The bridge is byte-transparent:
 unchanged, and keys go back wrapped in termproxy's `0:LEN:DATA` messages. The design, protocol facts and open
 questions are in [decision 0036](../../docs/decisions/0036-v1-terminal-bridge-to-the-users-terminal-first.md).
 
-PveTerm is not in the v0 zip yet. A launcher (the v1 client, or `tools/pve-vv.py --term` for development) starts it
-and hands it the connection data.
+A launcher starts it and hands it the connection data: the v1 PVE launcher (`src/PveLauncher`, decision
+[0038](../../docs/decisions/0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md)), with which it ships in the
+zip, or `tools/pve-vv.py --term` for development. `Pve.Api.TerminalLauncher` is the launcher's side.
 
 ## Command line
 
