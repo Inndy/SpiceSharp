@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-30-pveterm.md](2026-10-30-pveterm.md) | PveTerm protocol, console input/lifecycle, descriptor hand-off, TLS policy, allocation, and window-free regressions |
 | [2026-10-30-display-off-and-monitor-area.md](2026-10-30-display-off-and-monitor-area.md) | Guest display-off state, monitor-area geometry, input identity/edges, and window-free regressions |
 | [2026-10-30-audio-detach.md](2026-10-30-audio-detach.md) | Audio stream/device lifetime, detached expiry and reattach timing, retry energy policy, notification callbacks, and window-free regressions |
 | [2026-10-30-stream-tail.md](2026-10-30-stream-tail.md) | Stream-tail visibility/counting, destroy-time drawing and ordering, agent replies, and window-free regressions |

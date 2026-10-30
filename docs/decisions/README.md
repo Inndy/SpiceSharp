@@ -44,3 +44,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0033](0033-pve-api-tls-pins-a-given-ca-else-uses-system-trust.md) | The PVE API client pins a given CA, otherwise uses the system trust roots (human, 2026-10-30) |
 | [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30) |
 | [0035](0035-guest-display-off-takes-keys-and-the-monitor-area-is-shown.md) | A guest without a display says so and takes keys; the viewer shows the guest's monitor, not its whole surface |
+| [0036](0036-v1-terminal-bridge-to-the-users-terminal-first.md) | v1 terminal: bridge to the user's terminal first; byte-transparent console bridge, pipe hand-off, keep-alive policy (human, 2026-10-30) |

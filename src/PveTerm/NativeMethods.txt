@@ -1,0 +1,17 @@
+// Console front end (ConsoleFrontEnd.cs)
+CreateFile
+GetConsoleMode
+SetConsoleMode
+GetConsoleCP
+SetConsoleCP
+GetConsoleOutputCP
+SetConsoleOutputCP
+ReadConsoleInput
+WriteConsole
+GetConsoleScreenBufferInfo
+GetConsoleTitle
+SetConsoleTitle
+SetConsoleCtrlHandler
+INPUT_RECORD
+CONSOLE_MODE
+WriteFile

@@ -1,0 +1,13 @@
+// Hand-off pipe (Handoff.cs)
+CreateNamedPipe
+GetNamedPipeServerProcessId
+ConvertStringSecurityDescriptorToSecurityDescriptor
+LocalFree
+OpenProcess
+OpenProcessToken
+GetTokenInformation
+GetCurrentProcess
+CloseHandle
+TOKEN_MANDATORY_LABEL
+FILE_FLAGS_AND_ATTRIBUTES
+NAMED_PIPE_MODE
