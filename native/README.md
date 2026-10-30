@@ -49,8 +49,11 @@ Windows, the Linux-built x64 smoke test passed, and so did the difference test
 with the Linux-built spicecodec.dll as the DLL under test. To repeat that, run
 `bash native/difftest/run.sh` once, then from `native/build/difftest/release`:
 `./difftest.exe ref/spicecodec.dll <linux-out>/spicecodec.dll --fixtures
-../../../../tests/fixtures`. The ARM64 DLLs have not run yet: run the ARM64
-smoke executable on Windows ARM64.
+../../../../tests/fixtures`. The ARM64 DLLs built
+this way ran in the win-arm64 release zip: the human connected it to the win81
+guest from a Windows ARM64 machine on 2026-10-30, and everything they tried worked
+(see docs/verification/2026-10-30-arm64.md). The ARM64 smoke and difference tests
+have not been run on ARM64 yet.
 
 ## ABI and binding decisions
 
