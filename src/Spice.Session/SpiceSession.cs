@@ -135,7 +135,7 @@ public sealed partial class SpiceSession : IAsyncDisposable
             Log.Warn($"{id}: {codecError}; LZ images will not be drawn");
         var caps = id.Type switch
         {
-            ChannelType.Display => DisplayCaps(VideoCodecCapsOverride),
+            ChannelType.Display => VideoCodecCapsOverride is { } codecCaps ? DisplayCaps(codecCaps) : DisplayCaps(await DecodableVideoCodecs(ct)),
             ChannelType.Inputs => new CapabilitySet(InputsCap.KeyScancode),
             ChannelType.Playback => new CapabilitySet(PlaybackCap.Volume, PlaybackCap.Latency, PlaybackCap.Opus),
             _ => new CapabilitySet(),
@@ -159,6 +159,45 @@ public sealed partial class SpiceSession : IAsyncDisposable
         return caps;
     }
 
+    /// <summary>The display capabilities with MJPEG and the given decodable codecs (docs/decisions/0037).</summary>
+    internal static CapabilitySet DisplayCaps(IReadOnlyList<VideoCodecType> decodable)
+    {
+        var caps = DisplayCaps();
+        foreach (var c in decodable) caps.Set(ClientMsg.CodecCap(c));
+        return caps;
+    }
+
+    /// <summary>
+    /// The codecs besides MJPEG that <see cref="VideoDecoders"/> decodes, remembered for the streams and the preference.
+    /// Waits for the factory's probe, at most <see cref="VideoProbeTimeout"/>; without an answer only MJPEG is advertised.
+    /// </summary>
+    async Task<VideoCodecType[]> DecodableVideoCodecs(CancellationToken ct)
+    {
+        VideoCodecType[] codecs = [];
+        if (VideoDecoders is { } factory)
+        {
+            try
+            {
+                var list = await factory.Codecs.WaitAsync(VideoProbeTimeout, ct);
+                codecs = [.. list.Where(c => c != VideoCodecType.Mjpeg && ClientMsg.CodecCap(c) >= 0).Distinct()];
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception e) { Log.Warn($"display: no hardware video decoders ({e.Message}); advertising MJPEG only"); }
+        }
+        Volatile.Write(ref _videoCodecs, codecs);
+        Log.Info($"display: video codecs advertised: MJPEG{string.Concat(codecs.Select(c => $", {c}"))}");
+        return codecs;
+    }
+
+    /// <summary>Longest wait for <see cref="IVideoDecoderFactory.Codecs"/> before the display channel links.</summary>
+    static readonly TimeSpan VideoProbeTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Decoders for video codecs besides MJPEG (docs/decisions/0037). Their codecs are advertised on the display channel
+    /// and their streams decoded by them; without a factory the session decodes MJPEG only, as before.
+    /// </summary>
+    public IVideoDecoderFactory? VideoDecoders { get; init; }
+
     /// <summary>
     /// Diagnostics only (spice-cli): the video codec capabilities (<c>DisplayCap.Codec*</c>) to advertise instead of
     /// MJPEG, to find out which encoders the server can use. Streams in codecs other than MJPEG are logged and dropped.
@@ -179,6 +218,7 @@ public sealed partial class SpiceSession : IAsyncDisposable
                 // Interlocked.Exchange), so at least one of them sends; at worst both do, which repeats the same request.
                 Interlocked.Exchange(ref _display, ch);
                 SendPreferredCompression(ch, PreferredCompression);
+                if (PreferredVideoCodecs is { } codecs) SendPreferredVideoCodecs(ch, codecs);
                 StartLoop(ch, OnDisplayMessage);
                 break;
             case ChannelType.Inputs:

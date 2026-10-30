@@ -23,7 +23,8 @@ sealed unsafe partial class MainWindow
         IdScaleFit = 0x140, IdScale1To1 = 0x150, IdKeysAlways = 0x160, IdKeysFullscreen = 0x170, IdKeysNever = 0x180,
         IdAbout = 0x190, IdResizeGuest = 0x1A0, IdServerCursor = 0x1B0,
         IdPacingSpacing = 0x1C0, IdPacingClock = 0x1D0, IdPacingOff = 0x1E0,
-        IdFastJpeg = 0x1F0, IdCompressionAuto = 0x200, IdCompressionLz4 = 0x210;
+        IdFastJpeg = 0x1F0, IdCompressionAuto = 0x200, IdCompressionLz4 = 0x210,
+        IdCodecAuto = 0x220, IdCodecServer = 0x230, IdCodecMjpeg = 0x240, IdCodecH264 = 0x250, IdCodecVp9 = 0x260, IdCodecH265 = 0x270;
     const int IdCloseButton = 1001;
 
     readonly VvConnection _vv;
@@ -541,6 +542,13 @@ sealed unsafe partial class MainWindow
         var compression = PInvoke.CreatePopupMenu();
         AppendItem(compression, IdCompressionAuto, "Server default");
         AppendItem(compression, IdCompressionLz4, "LZ4 (fast, more bandwidth)");
+        var codec = PInvoke.CreatePopupMenu();
+        AppendItem(codec, IdCodecAuto, "Automatic (hardware decoding first)");
+        AppendItem(codec, IdCodecServer, "Server default");
+        AppendItem(codec, IdCodecMjpeg, "MJPEG");
+        AppendItem(codec, IdCodecH264, "H.264");
+        AppendItem(codec, IdCodecVp9, "VP9");
+        AppendItem(codec, IdCodecH265, "HEVC");
 
         AppendItem(_sysMenu, 0, null);
         AppendItem(_sysMenu, IdCtrlAltDel, "Send Ctrl+Alt+Del");
@@ -554,16 +562,18 @@ sealed unsafe partial class MainWindow
         AppendPopup(_sysMenu, pacing, "Video pacing");
         AppendItem(_sysMenu, IdFastJpeg, "Fast JPEG decoding (slightly lower quality)");
         AppendPopup(_sysMenu, compression, "Image compression");
+        AppendPopup(_sysMenu, codec, "Video codec");
         AppendItem(_sysMenu, 0, null);
         AppendItem(_sysMenu, IdAbout, "About SpiceViewer…");
         _scalingMenu = scaling;
         _keysMenu = keys;
         _pacingMenu = pacing;
         _compressionMenu = compression;
+        _codecMenu = codec;
         UpdateMenuChecks();
     }
 
-    HMENU _scalingMenu, _keysMenu, _pacingMenu, _compressionMenu;
+    HMENU _scalingMenu, _keysMenu, _pacingMenu, _compressionMenu, _codecMenu;
 
     static void AppendItem(HMENU m, uint id, string? text)
     {
@@ -592,6 +602,16 @@ sealed unsafe partial class MainWindow
         PInvoke.CheckMenuItem(_sysMenu, IdFastJpeg, (uint)(_fastJpeg ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
         uint c = _imageCompression == ImageCompressionMode.Lz4 ? IdCompressionLz4 : IdCompressionAuto;
         PInvoke.CheckMenuRadioItem(_compressionMenu, IdCompressionAuto, IdCompressionLz4, c, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
+        uint v = _videoCodec switch
+        {
+            VideoCodecMode.Server => IdCodecServer, VideoCodecMode.Mjpeg => IdCodecMjpeg, VideoCodecMode.H264 => IdCodecH264,
+            VideoCodecMode.Vp9 => IdCodecVp9, VideoCodecMode.H265 => IdCodecH265, _ => IdCodecAuto,
+        };
+        PInvoke.CheckMenuRadioItem(_codecMenu, IdCodecAuto, IdCodecH265, v, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
+        // A codec without a hardware decoder here can't be chosen (until the probe answers, none can).
+        var decodable = DecodableVideoCodecs();
+        foreach (var (id, codecType) in (ReadOnlySpan<(uint, VideoCodecType)>)[(IdCodecH264, VideoCodecType.H264), (IdCodecVp9, VideoCodecType.Vp9), (IdCodecH265, VideoCodecType.H265)])
+            PInvoke.EnableMenuItem(_codecMenu, id, MENU_ITEM_FLAGS.MF_BYCOMMAND | (decodable.Contains(codecType) ? MENU_ITEM_FLAGS.MF_ENABLED : MENU_ITEM_FLAGS.MF_GRAYED));
     }
 
     public bool OnSysCommand(uint cmd)
@@ -622,6 +642,12 @@ sealed unsafe partial class MainWindow
             case IdFastJpeg: SetFastJpeg(!_fastJpeg); return true;
             case IdCompressionAuto: SetImageCompression(ImageCompressionMode.Auto); return true;
             case IdCompressionLz4: SetImageCompression(ImageCompressionMode.Lz4); return true;
+            case IdCodecAuto: SetVideoCodec(VideoCodecMode.Auto); return true;
+            case IdCodecServer: SetVideoCodec(VideoCodecMode.Server); return true;
+            case IdCodecMjpeg: SetVideoCodec(VideoCodecMode.Mjpeg); return true;
+            case IdCodecH264: SetVideoCodec(VideoCodecMode.H264); return true;
+            case IdCodecVp9: SetVideoCodec(VideoCodecMode.Vp9); return true;
+            case IdCodecH265: SetVideoCodec(VideoCodecMode.H265); return true;
             case IdAbout: ShowAbout(); return true;
         }
         return false;
@@ -644,6 +670,7 @@ sealed unsafe partial class MainWindow
             "decoders from spice-common and spice-gtk (LGPL-2.1-or-later, in the replaceable spicecodec.dll). " +
             "Architecture after SpiceSee (MIT).\n\n" +
             $"Renderer: {p?.AdapterName ?? "-"}{(p?.IsSoftware == true ? " (software)" : "")}\n" +
+            $"Video decoding: MJPEG (libjpeg-turbo){string.Concat(DecodableVideoCodecs().Select(c => $", {c} (hardware)"))}\n" +
             $"Session: {(_session?.AgentConnected == true ? "guest agent connected" : "no guest agent")}, " +
             $"mouse {(_session?.MouseMode == MouseMode.Client ? "client" : "server")} mode");
     }

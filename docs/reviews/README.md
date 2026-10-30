@@ -8,6 +8,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 | [2026-10-31-l13-l15.md](2026-10-31-l13-l15.md) | L13-L15 status/detail layout, shared append-only log, truncation, I/O errors, handle lifetime, and window-free regressions |
 | [2026-10-31-idle-memory.md](2026-10-31-idle-memory.md) | K1 idle-memory trimming, decision 0041, native ownership and optional export, bounded pixel pool, trim concurrency, and window-free regressions |
 | [2026-10-31-launcher.md](2026-10-31-launcher.md) | v1 PVE launcher auth/TFA, TLS, Credential Manager, hand-offs, packaging/licenses, energy/AOT, and window-free regressions |
+| [2026-10-31-hardware-video.md](2026-10-31-hardware-video.md) | Hardware video protocol, MF/D3D11 ownership and recovery, resource budgets, settings, and window-free regressions |
 | [2026-10-30-pveterm.md](2026-10-30-pveterm.md) | PveTerm protocol, console input/lifecycle, descriptor hand-off, TLS policy, allocation, and window-free regressions |
 | [2026-10-30-display-off-and-monitor-area.md](2026-10-30-display-off-and-monitor-area.md) | Guest display-off state, monitor-area geometry, input identity/edges, and window-free regressions |
 | [2026-10-30-audio-detach.md](2026-10-30-audio-detach.md) | Audio stream/device lifetime, detached expiry and reattach timing, retry energy policy, notification callbacks, and window-free regressions |

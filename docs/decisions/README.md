@@ -45,6 +45,7 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30) |
 | [0035](0035-guest-display-off-takes-keys-and-the-monitor-area-is-shown.md) | A guest without a display says so and takes keys; the viewer shows the guest's monitor, not its whole surface |
 | [0036](0036-v1-terminal-bridge-to-the-users-terminal-first.md) | v1 terminal: bridge to the user's terminal first; byte-transparent console bridge, pipe hand-off, keep-alive policy (human, 2026-10-30) |
+| [0037](0037-hardware-video-decoding-h264-vp9-hevc-through-media-foundation.md) | H.264, VP9 and HEVC streams decode in hardware through Media Foundation; a codec is advertised only when decodable (human, 2026-10-31) |
 | [0038](0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md) | The v1 PVE launcher: WinUI 3, unpackaged, self-contained, Native AOT; a separate process per console (human, 2026-10-31) |
 | [0039](0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md) | PVE sign-in: an API token or a password with TOTP; secrets in Credential Manager (human, 2026-10-31) |
 | [0040](0040-viewers-sharing-a-data-folder-append-whole-lines-to-one-log.md) | Viewers sharing a data folder append whole lines to one viewer.log |

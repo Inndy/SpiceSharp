@@ -214,7 +214,10 @@ public sealed class DisplayStreamTests
     {
         await using var s = Session(); Dispatch(s, DisplayMsg.StreamCreate, Create(codec: codec)); Dispatch(s, DisplayMsg.StreamData, Data());
         Assert.Null(Field("_mjpeg").GetValue(s)); Assert.Null(Frame(s));
-        Assert.Equal(1u, State<uint>(s, "Drops")); Assert.Equal(1u, State<uint>(s, "Frames"));
+        // Without a decoder the stream is reported unsupported at creation (as spice-gtk's report_invalid_stream does,
+        // docs/decisions/0037) and its frames are ignored, not counted.
+        Assert.True(State<bool>(s, "Unsupported"));
+        Assert.Equal(0u, State<uint>(s, "Drops")); Assert.Equal(0u, State<uint>(s, "Frames"));
         Assert.All(Pixels(s.Canvas.Primary!), p => Assert.Equal(Black, p));
     }
 

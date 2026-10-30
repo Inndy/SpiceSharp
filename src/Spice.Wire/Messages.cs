@@ -169,6 +169,33 @@ public static class ClientMsg
     /// <summary>SPICE_MSGC_DISPLAY_PREFERRED_COMPRESSION (<see cref="DisplayMsg.CPreferredCompression"/>): one image_compression byte.</summary>
     public static int PreferredCompression(Span<byte> d, ImageCompression compression) { var w = new SpiceWriter(d); w.U8((byte)compression); return w.Length; }
 
+    /// <summary>
+    /// SPICE_MSGC_DISPLAY_PREFERRED_VIDEO_CODEC_TYPE (<see cref="DisplayMsg.CPreferredVideoCodecType"/>): spice.proto's
+    /// <c>{ uint8 num_of_codecs; video_codec_type codecs[num_of_codecs] @end; }</c>, most preferred first.
+    /// </summary>
+    public static int PreferredVideoCodecType(Span<byte> d, ReadOnlySpan<VideoCodecType> codecs)
+    {
+        if (codecs.Length is 0 or > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(codecs));
+        var w = new SpiceWriter(d);
+        w.U8((byte)codecs.Length);
+        foreach (var c in codecs) w.U8((byte)c);
+        return w.Length;
+    }
+
+    /// <summary>
+    /// The display capability that advertises <paramref name="codec"/> (SPICE_DISPLAY_CAP_CODEC_*), or -1 for a value
+    /// spice-protocol doesn't define.
+    /// </summary>
+    public static int CodecCap(VideoCodecType codec) => codec switch
+    {
+        VideoCodecType.Mjpeg => DisplayCap.CodecMjpeg,
+        VideoCodecType.Vp8 => DisplayCap.CodecVp8,
+        VideoCodecType.H264 => DisplayCap.CodecH264,
+        VideoCodecType.Vp9 => DisplayCap.CodecVp9,
+        VideoCodecType.H265 => DisplayCap.CodecH265,
+        _ => -1,
+    };
+
     public static int DisplayInit(Span<byte> d, byte cacheId, long cacheSize, byte glzDictId, int glzWindowSize)
     {
         var w = new SpiceWriter(d);

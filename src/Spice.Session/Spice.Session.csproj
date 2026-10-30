@@ -7,5 +7,7 @@
   <ItemGroup>
     <!-- Stream pacing tests drive the display handler with a manual clock (docs/decisions/0025). -->
     <InternalsVisibleTo Include="Spice.Replay.Tests" />
+    <!-- The hardware decoders' window-free tests drive streams through the display handler (docs/decisions/0037). -->
+    <InternalsVisibleTo Include="Spice.Video.Tests" />
   </ItemGroup>
 </Project>

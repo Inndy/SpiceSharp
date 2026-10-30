@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="../Spice.Session/Spice.Session.csproj" />
     <AdditionalFiles Include="Audio/NativeMethods.txt" />
+    <AdditionalFiles Include="Video/NativeMethods.txt" />
   </ItemGroup>
   <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
 </Project>

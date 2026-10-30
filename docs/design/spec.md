@@ -35,7 +35,7 @@ Build the v0 viewer first. The Proxmox API launcher (v1) is optional and MUST NO
 | Version | Delivers | Notes |
 | --- | --- | --- |
 | v0 | `.vv` viewer: display, keyboard and mouse, system shortcuts, cursor, guest agent (clipboard, resize-follows-window), audio playback, MJPEG video | The product; optimize for speed, efficiency and UX |
-| Post-v0 | H.264 video, multiple monitors | Same viewer |
+| Post-v0 | Hardware video (H.264, VP9, HEVC), multiple monitors | Same viewer |
 | v1 (optional) | WinUI 3 launcher: VM list from the PVE API, saved connections | Starts the viewer as a separate process; never embeds it |
 
 - **Targets:** Proxmox VE VMs with the SPICE (QXL) display. Plain QEMU and libvirt `.vv` files work too.
@@ -136,7 +136,7 @@ SpiceViewer.sln
 ```
 
 - `Spice.Wire` MUST NOT perform I/O or depend on any other project.
-- Only `SpiceViewer` may use Win32 windowing, Direct3D, Media Foundation or WASAPI. Hardware H.264 (post-v0) lives there because it shares the presenter's D3D11 device.
+- Only `SpiceViewer` may use Win32 windowing, Direct3D, Media Foundation or WASAPI. Hardware video decoding (post-v0) lives there because it uses Direct3D 11 on the presenter's adapter.
 - `Spice.Session` exposes events (surface dirty rectangles, cursor changes, audio frames, clipboard) and methods for input; the app never touches channels directly.
 - `VvFile` has no dependencies, so the v1 launcher can reuse it.
 
@@ -227,13 +227,13 @@ The official SPICE spec is outdated. Use the `spice-protocol` headers for wire l
 
 ## Video and audio
 
-v0 decodes MJPEG streams and Opus audio; hardware H.264 comes after v0.
+v0 decodes MJPEG streams and Opus audio; hardware H.264, VP9 and HEVC come after v0.
 
 Proxmox sends video streams only when video streaming is enabled in the VM's SPICE settings, so many sessions never use this path.
 
 - **MJPEG (v0):** decode with libjpeg-turbo into the framebuffer at the stream's destination rectangle, clipped by its clip region, then report the rectangle as dirty.
-- **H.264 (post-v0):** Media Foundation hardware decoder on the presenter's D3D11 device; `ID3D11VideoProcessor` converts and scales. The first version copies frames into the framebuffer, so later draw commands that read those pixels stay correct.
-- **Codec advertising:** advertise H.264 only when Media Foundation's decoder exists and the adapter is hardware. Windows "N" editions and Windows Server without Media Foundation get MJPEG only.
+- **H.264, VP9 and HEVC (post-v0; the human, 2026-10-31):** Media Foundation hardware decoder on the presenter's D3D11 device; `ID3D11VideoProcessor` converts and scales. The first version copies frames into the framebuffer, so later draw commands that read those pixels stay correct. It currently decodes on its own device on the same adapter, pending the human ([decisions/0037](../decisions/0037-hardware-video-decoding-h264-vp9-hevc-through-media-foundation.md)). VP8 is not decoded.
+- **Codec advertising:** advertise H.264, VP9 and HEVC each only when the adapter is hardware, has a DXVA decoder profile for that codec, and Media Foundation has a Direct3D 11 decoder for it (VP9 and HEVC usually need Microsoft's Store video extensions). VP8 is never advertised. Windows "N" editions and Windows Server without Media Foundation get MJPEG only.
 - **Pacing:** display frames against the guest's multimedia clock, as SpiceSee does.
 - **Audio (v0):** decode Opus with libopus (also accept raw PCM) and play through WASAPI in shared, event-driven mode. Open the stream on playback start and close it on playback stop; an open stream wakes the CPU every few milliseconds.
 - **Not in v0:** microphone input, DirectComposition video overlays.
@@ -359,7 +359,7 @@ Do these in order. Each ends with a definition of done (DoD) that MUST pass befo
 8. **v0 release.** Software-rendering profile, signed installer, WARP and RDP checks.
    - DoD: the full test matrix passes.
 
-After v0: H.264 through Media Foundation, multiple monitors, then the optional v1 launcher.
+After v0: H.264, VP9 and HEVC through Media Foundation, multiple monitors, then the optional v1 launcher.
 
 ## Risks and open questions
 

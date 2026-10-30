@@ -20,8 +20,10 @@ sealed unsafe partial class MainWindow
     /// <summary>Starts connecting at once — before the window exists, since the ticket expires quickly.</summary>
     public void StartSession()
     {
-        var s = new SpiceSession(_vv);
+        var s = new SpiceSession(_vv) { VideoDecoders = Program.Video };
         _session = s;
+        // The video codec menu enables the hardware codecs once the probe has answered.
+        Program.Video?.Codecs.ContinueWith(_ => Post(UpdateMenuChecks), TaskScheduler.Default);
         s.PrimarySurfaceChanged += (_, _) => Post(OnPrimaryChanged);
         s.DisplayStateChanged += _ => Post(OnDisplayStateChanged);
         s.CopiedBits += (r, dx, dy) => _presenter?.CopyBits(r, dx, dy);

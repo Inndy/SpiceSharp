@@ -21,6 +21,7 @@ sealed unsafe partial class MainWindow
     VideoPacingMode _videoPacing = VideoPacingMode.Off;
     bool _fastJpeg;
     ImageCompressionMode _imageCompression = ImageCompressionMode.Auto;
+    VideoCodecMode _videoCodec = VideoCodecMode.Auto;
     /// <summary>The window opened at a remembered rectangle, so the first frame doesn't resize or center it.</summary>
     bool _restoredPlacement;
     bool _restoreFullscreen;
@@ -40,12 +41,14 @@ sealed unsafe partial class MainWindow
         // The session started connecting before the settings were read; a mode change reschedules anything queued.
         _fastJpeg = s.FastJpeg;
         _imageCompression = s.ImageCompression;
+        _videoCodec = s.VideoCodec;
         if (_session is { } session)
         {
             session.VideoPacing = SessionPacing(_videoPacing);
             // The display channel may not be up yet; the session sends the preference once it is.
             session.FastJpeg = _fastJpeg;
             session.PreferredCompression = SessionCompression(_imageCompression);
+            session.PreferredVideoCodecs = _videoCodec.ServerOrder();
         }
         _vmKey = SettingsStore.VmKey(_vv.Host, _vv.Proxy?.Host, _vv.Title);
         if (_vmKey is null || !s.Vms.TryGetValue(_vmKey, out var vm)) return (DefaultRect(), false);
@@ -207,5 +210,22 @@ sealed unsafe partial class MainWindow
         UpdateMenuChecks();
         if (_session is { } session) session.PreferredCompression = SessionCompression(mode);
         SaveSetting(s => s.ImageCompression = mode);
+    }
+
+    /// <summary>The codecs decoded in hardware here; empty until the probe has answered.</summary>
+    static IReadOnlyList<VideoCodecType> DecodableVideoCodecs() =>
+        Program.Video is { Codecs.IsCompletedSuccessfully: true } video ? video.Codecs.Result : [];
+
+    /// <summary>
+    /// A menu change: sent to the running session's server at once (it then restarts its streams with the new order);
+    /// going back to the server default takes effect on the next connection. Saved for all VMs.
+    /// </summary>
+    void SetVideoCodec(VideoCodecMode mode)
+    {
+        if (mode == _videoCodec) return;
+        _videoCodec = mode;
+        UpdateMenuChecks();
+        if (_session is { } session) session.PreferredVideoCodecs = mode.ServerOrder();
+        SaveSetting(s => s.VideoCodec = mode);
     }
 }

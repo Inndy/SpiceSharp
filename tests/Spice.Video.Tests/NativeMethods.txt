@@ -1,0 +1,8 @@
+// Test-only: the inbox Media Foundation H.264 encoder that makes the synthetic clips.
+MFT_CATEGORY_VIDEO_ENCODER
+MF_MT_AVG_BITRATE
+MF_MT_FRAME_RATE
+MF_MT_PIXEL_ASPECT_RATIO
+MF_MT_MPEG2_PROFILE
+MF_MT_YUV_MATRIX
+eAVEncH264VProfile

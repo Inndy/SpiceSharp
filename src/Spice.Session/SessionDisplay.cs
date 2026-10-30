@@ -21,12 +21,24 @@ public sealed partial class SpiceSession
 
     sealed class VideoStream
     {
+        public required uint Id;
         public required uint SurfaceId;
         public required VideoCodecType Codec;
         public required bool TopDown;
         public required SpiceRect Dest;
         public SpiceClip Clip;
         public DecodedImage? Frame;
+        /// <summary>The stream's own decoder (H.264, VP9, HEVC); null for MJPEG, which shares <see cref="_mjpeg"/>.</summary>
+        public IVideoDecoder? Decoder;
+        /// <summary>
+        /// Reported to the server as unsupported (no decoder, or it failed): the server sends the area as images, and any
+        /// frame still arriving is ignored (docs/decisions/0037).
+        /// </summary>
+        public bool Unsupported;
+        /// <summary>The decoder has made a picture; its frames before that are checked for their declared format.</summary>
+        public bool Pictured;
+        /// <summary>Frames left to look for the declared format in (<see cref="CheckVideoFormat"/>); 0 once known.</summary>
+        public int FormatChecks = MaxFormatChecks;
         // stream report bookkeeping: Frames and Drops count the frames that arrived in the current report window and
         // those of them dropped, whenever the drop happens (a queued frame can be dropped after its window was sent)
         public uint UniqueId, MaxWindow, Frames, Drops, StartMm, LastMm, Window;
@@ -46,7 +58,10 @@ public sealed partial class SpiceSession
     }
 
     readonly Dictionary<uint, VideoStream> _streams = [];
-    JpegDecoder? _mjpeg;
+    MjpegVideoDecoder? _mjpeg;
+    VideoOutput? _videoOutput;
+    /// <summary>The codecs besides MJPEG advertised on the display channel, from <see cref="VideoDecoders"/>.</summary>
+    VideoCodecType[] _videoCodecs = [];
 
     /// <summary>Concurrent video streams kept (spice-server uses at most 50).</summary>
     const int MaxStreams = 64;
@@ -163,6 +178,85 @@ public sealed partial class SpiceSession
         return true;
     }
 
+    VideoCodecType[]? _preferredVideoCodecs;
+
+    /// <summary>
+    /// The video codecs asked of the server, most preferred first (docs/decisions/0037); null (default) asks for nothing
+    /// and leaves the server's order. Sent as DISPLAY_PREFERRED_VIDEO_CODEC_TYPE once the display channel is up, and again
+    /// on each change, if the server has SPICE_DISPLAY_CAP_PREF_VIDEO_CODEC_TYPE. Only codecs this session advertises are
+    /// sent; when none is left nothing is sent. spice-server sorts its own codec list by it, codecs not named keeping
+    /// their order after the named ones, and stops the running streams so new ones use it. The protocol can't return to
+    /// the server's order: going back to null takes effect on the next connection.
+    /// </summary>
+    public IReadOnlyList<VideoCodecType>? PreferredVideoCodecs
+    {
+        get => Volatile.Read(ref _preferredVideoCodecs);
+        set
+        {
+            VideoCodecType[]? list = null;
+            if (value is not null)
+            {
+                foreach (var c in value) if (ClientMsg.CodecCap(c) < 0) throw new ArgumentOutOfRangeException(nameof(value));
+                list = [.. value];
+            }
+            lock (_preferenceLock)
+            {
+                var old = Interlocked.Exchange(ref _preferredVideoCodecs, list);
+                if (old is null ? list is null : list is not null && old.AsSpan().SequenceEqual(list)) return;
+                if (Volatile.Read(ref _display) is not { } display) return;
+                if (list is null) Log.Info("display: the server keeps the requested video codec order until the next connection");
+                else SendPreferredVideoCodecs(display, list);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Serializes a preference's filtering and sending with avoidance (<see cref="AvoidVideoCodec"/>), so the last
+    /// preference sent never names a codec avoided before it. Taken after _streamLock when both are held, never before.
+    /// </summary>
+    readonly Lock _preferenceLock = new();
+
+    /// <summary>
+    /// Sends DISPLAY_PREFERRED_VIDEO_CODEC_TYPE with the codecs of <paramref name="preferred"/> that this session
+    /// advertises (MJPEG and the decodable ones), in order. False, logged, when the server takes no preference or no
+    /// codec is left.
+    /// </summary>
+    internal bool SendPreferredVideoCodecs(SpiceChannel display, IReadOnlyList<VideoCodecType> preferred)
+    {
+        lock (_preferenceLock) return SendPreferredVideoCodecsLocked(display, preferred);
+    }
+
+    bool SendPreferredVideoCodecsLocked(SpiceChannel display, IReadOnlyList<VideoCodecType> preferred)
+    {
+        var advertised = Volatile.Read(ref _videoCodecs);
+        Span<VideoCodecType> codecs = stackalloc VideoCodecType[8];
+        int n = 0;
+        foreach (var c in preferred)
+        {
+            if (c != VideoCodecType.Mjpeg && (Array.IndexOf(advertised, c) < 0 || IsAvoided(c))) continue;
+            if (codecs[..n].Contains(c) || n == codecs.Length) continue;
+            codecs[n++] = c;
+        }
+        // An avoided codec is still advertised; the server ranks codecs not named after the named ones, so naming MJPEG
+        // keeps it ahead of them.
+        if (Volatile.Read(ref _avoidedCodecs) != 0 && !codecs[..n].Contains(VideoCodecType.Mjpeg) && n < codecs.Length)
+            codecs[n++] = VideoCodecType.Mjpeg;
+        if (n == 0)
+        {
+            Log.Info($"display: none of the preferred video codecs ({string.Join(", ", preferred)}) can be decoded here; the server's order stands");
+            return false;
+        }
+        if (!display.ServerChannelCaps.Has(DisplayCap.PrefVideoCodecType))
+        {
+            Log.Info("display: the server takes no preferred video codec; its own order stands");
+            return false;
+        }
+        Span<byte> b = stackalloc byte[1 + 8];
+        display.Send(DisplayMsg.CPreferredVideoCodecType, b[..ClientMsg.PreferredVideoCodecType(b, codecs[..n])]);
+        Log.Info($"display: asked the server to prefer video codecs {string.Join(", ", codecs[..n].ToArray())}");
+        return true;
+    }
+
     /// <summary>The pacing clock. Tests replace it before the first stream message to replay deterministically.</summary>
     internal PacingClock PacingClock
     {
@@ -197,18 +291,36 @@ public sealed partial class SpiceSession
             case DisplayMsg.StreamCreate:
             {
                 var sc = StreamCreate.Parse(m);
-                if (sc.Codec != VideoCodecType.Mjpeg) Log.Warn($"display: stream {sc.Id} uses unsupported codec {sc.Codec}");
-                else Log.Info($"display: stream {sc.Id} {sc.Codec} {sc.Dest.Width}x{sc.Dest.Height} on surface {sc.SurfaceId}");
+                // Made outside the stream lock: a hardware decoder takes a few milliseconds to set up, and a paced
+                // frame of another stream may be due meanwhile.
+                var decoder = sc.Codec == VideoCodecType.Mjpeg ? null : CreateDecoder(sc);
+                bool unsupported = sc.Codec != VideoCodecType.Mjpeg && decoder is null;
+                if (unsupported) Log.Warn($"display: stream {sc.Id} uses {sc.Codec}, which can't be decoded here");
+                else Log.Info($"display: stream {sc.Id} {sc.Codec} {sc.StreamWidth}x{sc.StreamHeight} to {sc.Dest.Width}x{sc.Dest.Height} on surface {sc.SurfaceId}");
                 lock (_streamLock)
                 {
-                    if (_streams.Remove(sc.Id, out var old)) EndStream(old);
-                    if (_streams.Count >= MaxStreams) throw new CanvasException($"too many video streams ({_streams.Count})");
-                    // SpiceClip slices the message buffer, which is reused: copy the rects now.
-                    _streams[sc.Id] = new VideoStream
+                    // Avoidance happens under this lock; the codec may have been avoided while the decoder was made.
+                    if (decoder is not null && IsAvoided(sc.Codec))
                     {
-                        SurfaceId = sc.SurfaceId, Codec = sc.Codec, TopDown = (sc.Flags & StreamCreate.FlagTopDown) != 0,
-                        Dest = sc.Dest, Clip = CopyClip(sc.Clip),
-                    };
+                        DisposeDecoderQuietly(sc.Id, decoder);
+                        decoder = null;
+                        unsupported = true;
+                        Log.Info($"display: stream {sc.Id}: {sc.Codec} was avoided while its decoder was made");
+                    }
+                    try
+                    {
+                        if (_streams.Remove(sc.Id, out var old)) EndStream(old);
+                        if (_streams.Count >= MaxStreams) throw new CanvasException($"too many video streams ({_streams.Count})");
+                        // SpiceClip slices the message buffer, which is reused: copy the rects now.
+                        _streams[sc.Id] = new VideoStream
+                        {
+                            Id = sc.Id, SurfaceId = sc.SurfaceId, Codec = sc.Codec, TopDown = (sc.Flags & StreamCreate.FlagTopDown) != 0,
+                            Dest = sc.Dest, Clip = CopyClip(sc.Clip), Decoder = decoder, Unsupported = unsupported,
+                        };
+                    }
+                    catch { decoder?.Dispose(); throw; }
+                    // As spice-gtk does when it has no decoder: the server stops encoding and sends the area as images.
+                    if (unsupported) ReportUnsupported(sc.Id);
                 }
                 break;
             }
@@ -253,7 +365,7 @@ public sealed partial class SpiceSession
                 lock (_streamLock)
                 {
                     hadStreams = _streams.Count > 0;
-                    foreach (var s in _streams.Values) { DiscardQueue(s); s.Frame?.Release(); s.Frame = null; }
+                    foreach (var s in _streams.Values) { DiscardQueue(s); s.Frame?.Release(); s.Frame = null; DisposeDecoder(s); }
                     _streams.Clear();
                     ClearFramePool();
                     UpdateWake();
@@ -266,7 +378,7 @@ public sealed partial class SpiceSession
                 var (sid, unique, window, _) = DisplayParse.StreamActivateReport(m);
                 lock (_streamLock)
                 {
-                    if (_streams.TryGetValue(sid, out var s))
+                    if (_streams.TryGetValue(sid, out var s) && !s.Unsupported)
                     {
                         s.Reporting = true; s.UniqueId = unique; s.MaxWindow = window;
                         NextReportWindow(s);
@@ -289,8 +401,158 @@ public sealed partial class SpiceSession
         DiscardQueue(s);
         s.Frame?.Release();
         s.Frame = null;
+        DisposeDecoder(s);
         if (_streams.Count == 0) ClearFramePool();
         UpdateWake();
+    }
+
+    static void DisposeDecoder(VideoStream s)
+    {
+        var d = s.Decoder;
+        s.Decoder = null;
+        if (d is not null) DisposeDecoderQuietly(s.Id, d);
+    }
+
+    static void DisposeDecoderQuietly(uint id, IVideoDecoder d)
+    {
+        try { d.Dispose(); }
+        catch (Exception e) { Log.Error($"display: stream {id} decoder: {e.Message}"); }
+    }
+
+    /// <summary>A decoder for a new non-MJPEG stream, if its codec was advertised and the app's factory can make one now.</summary>
+    IVideoDecoder? CreateDecoder(in StreamCreate sc)
+    {
+        if (VideoDecoders is not { } factory || Array.IndexOf(Volatile.Read(ref _videoCodecs), sc.Codec) < 0) return null;
+        if (IsAvoided(sc.Codec)) return null; // logged when it was avoided
+        // The encoded size is a hint for the decoder (the bitstream carries the real one); an implausible one is left out.
+        int w = sc.StreamWidth <= Surface.MaxSide ? (int)sc.StreamWidth : 0, h = sc.StreamHeight <= Surface.MaxSide ? (int)sc.StreamHeight : 0;
+        try { return factory.Create(sc.Codec, w, h); }
+        catch (Exception e)
+        {
+            Log.Error($"display: stream {sc.Id}: no {sc.Codec} decoder: {e.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Tells the server the client can't show this stream: spice-gtk's report_invalid_stream (a STREAM_REPORT with
+    /// num_frames 0 and num_drops UINT32_MAX). spice-server's dcc_handle_stream_report then drops the stream's encoder and
+    /// sends what the stream would have carried as ordinary draw commands.
+    /// </summary>
+    void ReportUnsupported(uint id)
+    {
+        if (Volatile.Read(ref _display) is not { } display) return;
+        if (!display.ServerChannelCaps.Has(DisplayCap.StreamReport))
+        {
+            Log.Warn($"display: stream {id} can't be shown and the server takes no stream reports");
+            return;
+        }
+        Span<byte> b = stackalloc byte[32];
+        display.Send(DisplayMsg.CStreamReport, b[..ClientMsg.StreamReport(b, id, 0, 0, 0, 0, uint.MaxValue, 0, 0)]);
+        Log.Info($"display: asked the server to send stream {id} as images");
+    }
+
+    /// <summary>
+    /// Under _streamLock: the stream's decoder failed. Its queue and picture go, the server is told (it then sends the
+    /// area as images), and the frames still arriving for it are ignored.
+    /// </summary>
+    void FailStream(VideoStream s)
+    {
+        if (s.Unsupported) return;
+        // A decoder that never made a picture likely can't take what this server sends (a profile the format check
+        // doesn't know): the next streams of the codec would fail the same way.
+        if (!s.Pictured && s.Decoder is { HasDecoded: false } && s.Codec != VideoCodecType.Mjpeg)
+            AvoidVideoCodec(s.Codec, $"stream {s.Id} failed before its first picture");
+        s.Unsupported = true;
+        s.Reporting = false;
+        DiscardQueue(s);
+        s.Frame?.Release();
+        s.Frame = null;
+        DisposeDecoder(s);
+        ReportUnsupported(s.Id);
+        UpdateWake();
+    }
+
+    /// <summary>Frames of a new stream searched for its declared format (an H.264 SPS comes with the first frame).</summary>
+    const int MaxFormatChecks = 8;
+
+    /// <summary>
+    /// Under _streamLock: looks for the format a new stream's frame declares (<see cref="VideoBitstream"/>) and asks the
+    /// factory whether its decoders take it. False, with the stream failed and its codec avoided, when they don't:
+    /// spice-server's x264enc and vp9enc encode 4:4:4 by default, which no hardware decoder takes. Only the first frames
+    /// are read; nothing is allocated unless the format is logged.
+    /// </summary>
+    bool CheckVideoFormat(VideoStream s, ReadOnlySpan<byte> data)
+    {
+        if (!VideoBitstream.TryReadFormat(s.Codec, data, out var format))
+        {
+            s.FormatChecks--;
+            return true;
+        }
+        s.FormatChecks = 0;
+        if (VideoDecoders?.CanDecode(format) != false)
+        {
+            Log.Info($"display: stream {s.Id} is {format}");
+            return true;
+        }
+        Log.Warn($"display: stream {s.Id} is {format}, which the hardware decoder can't decode");
+        AvoidVideoCodec(s.Codec, $"the server encodes it as {format}");
+        FailStream(s);
+        return false;
+    }
+
+    int _avoidedCodecs; // bit per VideoCodecType
+
+    bool IsAvoided(VideoCodecType codec) => (Volatile.Read(ref _avoidedCodecs) & 1 << (int)codec) != 0;
+
+    /// <summary>
+    /// Stops asking for <paramref name="codec"/> for the rest of the session: new streams of it are reported unsupported
+    /// at creation, and the codec preference is sent again without it, MJPEG ahead of it (docs/decisions/0037). Its
+    /// capability stays advertised; capabilities can't change during a session.
+    /// </summary>
+    void AvoidVideoCodec(VideoCodecType codec, string why)
+    {
+        int bit = 1 << (int)codec;
+        lock (_preferenceLock)
+        {
+            int old = Volatile.Read(ref _avoidedCodecs);
+            if ((old & bit) != 0) return;
+            Volatile.Write(ref _avoidedCodecs, old | bit); // written only here, under the lock
+            Log.Warn($"display: {codec} video is off for this session ({why}); asking the server for other codecs");
+            if (Volatile.Read(ref _display) is { } display) SendPreferredVideoCodecsLocked(display, PreferredVideoCodecs ?? []);
+        }
+    }
+
+    /// <summary>
+    /// Under _streamLock: passes a frame that won't be shown to a decoder whose frames depend on earlier ones, so the
+    /// frames after it still decode (docs/decisions/0037). Nothing for MJPEG.
+    /// </summary>
+    void SkipFrame(VideoStream s, ReadOnlySpan<byte> data)
+    {
+        if (s.Decoder is not { NeedsEveryFrame: true } decoder) return;
+        VideoDecodeResult r;
+        try { r = decoder.Decode(data, null); }
+        catch (Exception e)
+        {
+            Log.Error($"display: stream {s.Id} decoder: {e.Message}");
+            r = VideoDecodeResult.Failed;
+        }
+        if (r == VideoDecodeResult.Failed) FailStream(s);
+    }
+
+    /// <summary>
+    /// Under _streamLock: a frame dropped on arrival (late, or too large to queue). For a decoder that needs every frame,
+    /// the queued frames are older, so they go to it first, in order (dropped and counted), then this one.
+    /// </summary>
+    void SkipArrived(VideoStream s, ReadOnlySpan<byte> data)
+    {
+        if (s.Decoder is not { NeedsEveryFrame: true }) return;
+        if (s.QueueCount > 0)
+        {
+            while (s.QueueCount > 0) DropHead(s);
+            UpdateWake();
+        }
+        SkipFrame(s, data);
     }
 
     void OnStreamData(in StreamData d)
@@ -298,6 +560,8 @@ public sealed partial class SpiceSession
         lock (_streamLock)
         {
             if (!_streams.TryGetValue(d.Id, out var s)) { Log.Debug($"display: data for unknown stream {d.Id}"); return; }
+            if (s.Unsupported) return; // reported; the server stops sending frames for it
+            if (s.FormatChecks > 0 && s.Decoder is not null && !CheckVideoFormat(s, d.Data.Span)) return;
             if (d.Dest is SpiceRect dest) s.Dest = dest;
             s.Frames++;
             if (s.Frames == 1) s.StartMm = d.MultiMediaTime;
@@ -321,7 +585,7 @@ public sealed partial class SpiceSession
         if (mode == VideoPacing.Off || !MmSeeded || _pacingStopped) { DecodeStreamFrame(s, data, s.Dest, s.Window); return; }
         long now = _pacing.NowMs;
         int margin = unchecked((int)(stamp - MultimediaTimeAt(now))); // > 0: ahead of the guest clock
-        if (mode == VideoPacing.Clock ? margin < 0 : margin < -LateMs) { s.Drops++; return; }
+        if (mode == VideoPacing.Clock ? margin < 0 : margin < -LateMs) { s.Drops++; SkipArrived(s, data); return; }
 
         int step = unchecked((int)(stamp - s.LastStamp));
         bool sameTimeline = s.Paced && step >= 0 && step <= MaxStampStepMs;
@@ -330,6 +594,7 @@ public sealed partial class SpiceSession
             // A new timeline (the timestamps went backwards or jumped): what is queued belongs to the old one.
             while (s.QueueCount > 0) DropHead(s);
             UpdateWake();
+            if (s.Unsupported) return; // the decoder failed on a dropped frame
         }
         long deadline = mode == VideoPacing.Clock ? now + Math.Min(margin, ClockMaxWaitMs)
             : sameTimeline ? Math.Clamp(s.LastDeadline + step - CatchUpMs, now, now + MaxLeadMs) : now;
@@ -377,12 +642,18 @@ public sealed partial class SpiceSession
     /// <summary>Under _streamLock: copies the frame into a pooled buffer at the queue's tail, dropping the oldest to fit.</summary>
     void Enqueue(VideoStream s, ReadOnlySpan<byte> data, uint stamp, long deadline)
     {
-        if (data.Length > MaxQueuedBytes) { s.Drops++; return; }
+        if (data.Length > MaxQueuedBytes) { s.Drops++; SkipArrived(s, data); return; }
         if (s.QueueCount == MaxQueuedFrames) DropHead(s);
+        if (s.Unsupported) return; // the decoder failed on a frame dropped above
         var buffer = RentFrameBuffer(data.Length, MaxQueuedBytes - _queuedBytes);
         // The budget counts each buffer's capacity, so the queues never hold more than MaxQueuedBytes of memory.
         while (s.QueueCount > 0 && _queuedBytes + buffer.Length > MaxQueuedBytes) DropHead(s);
-        if (_queuedBytes + buffer.Length > MaxQueuedBytes) { ReturnFrameBuffer(buffer); s.Drops++; return; }
+        if (s.Unsupported || _queuedBytes + buffer.Length > MaxQueuedBytes)
+        {
+            ReturnFrameBuffer(buffer);
+            if (!s.Unsupported) { s.Drops++; SkipArrived(s, data); }
+            return;
+        }
         data.CopyTo(buffer);
         s.Queue[(s.QueueHead + s.QueueCount) % MaxQueuedFrames] =
             new QueuedFrame { Data = buffer, Length = data.Length, Dest = s.Dest, Deadline = deadline, Stamp = stamp, Window = s.Window };
@@ -401,12 +672,16 @@ public sealed partial class SpiceSession
         return f;
     }
 
-    /// <summary>Drops the oldest queued frame and counts it.</summary>
+    /// <summary>
+    /// Drops the oldest queued frame and counts it. A decoder that needs every frame still gets it, unshown; if that
+    /// fails, the stream fails and its queue empties.
+    /// </summary>
     void DropHead(VideoStream s)
     {
         var f = Dequeue(s);
         CountDrop(s, f.Window);
-        ReturnFrameBuffer(f.Data);
+        try { SkipFrame(s, f.Data.AsSpan(0, f.Length)); }
+        finally { ReturnFrameBuffer(f.Data); }
     }
 
     /// <summary>Releases the queued frames without counting them (the stream or the session is ending).</summary>
@@ -463,7 +738,7 @@ public sealed partial class SpiceSession
     void DrawNewestQueued(VideoStream s)
     {
         while (s.QueueCount > 1) DropHead(s);
-        DrawHead(s);
+        if (s.QueueCount > 0) DrawHead(s); // empty when the decoder failed on a dropped frame
     }
 
     /// <summary>Under _streamLock: arms the wake for the earliest queued deadline, or cancels it when nothing is queued.</summary>
@@ -585,31 +860,64 @@ public sealed partial class SpiceSession
     /// <summary>
     /// Under _streamLock: decodes one frame and blits it at <paramref name="dest"/> with the stream's current clip. A
     /// frame the clip hides entirely (the server has drawn over the whole stream area since, e.g. the video's window
-    /// closed while frames waited for the guest clock) is counted as hidden and not decoded.
+    /// closed while frames waited for the guest clock) is counted as hidden and not decoded, unless the stream's decoder
+    /// needs every frame: then it is decoded without a picture.
     /// </summary>
     void DecodeStreamFrame(VideoStream s, ReadOnlySpan<byte> data, SpiceRect dest, uint window)
     {
-        if (s.Codec != VideoCodecType.Mjpeg) { CountDrop(s, window); return; }
-        if (!Canvas.IsFrameVisible(s.SurfaceId, dest, s.Clip)) { s.Hidden++; return; }
-        _mjpeg ??= new JpegDecoder();
-        _mjpeg.Fast = _fastJpeg; // applied to the codec handle only when it changes
-        if (!_mjpeg.TryReadHeader(data, out int w, out int h) || w <= 0 || h <= 0 || w > 8192 || h > 8192) { CountDrop(s, window); return; }
-        if (s.Frame is null || s.Frame.Width != w || s.Frame.Height != h)
+        if (s.Unsupported) return;
+        if (!Canvas.IsFrameVisible(s.SurfaceId, dest, s.Clip)) { s.Hidden++; SkipFrame(s, data); return; }
+        IVideoDecoder decoder;
+        if (s.Decoder is { } own) decoder = own;
+        else if (s.Codec == VideoCodecType.Mjpeg)
         {
-            s.Frame?.Release();
-            s.Frame = null;
-            long held = 0;
-            foreach (var other in _streams.Values) if (other.Frame is { } f) held += (long)f.Stride * f.Height;
-            if (held + (long)w * h * 4 > MaxStreamFrameBytes) { CountDrop(s, window); Log.Warn($"display: stream frame {w}x{h} exceeds the frame budget"); return; }
-            s.Frame = new DecodedImage(w, h, false);
+            _mjpeg ??= new MjpegVideoDecoder();
+            _mjpeg.Fast = _fastJpeg; // applied to the codec handle only when it changes
+            decoder = _mjpeg;
         }
-        if (!_mjpeg.TryDecode(data, s.Frame.Bytes, w, h, s.Frame.Stride)) { CountDrop(s, window); return; }
-        s.Frame.SetOpaque();
-        // MJPEG frames are top-down images; the stream's TOP_DOWN flag describes how the source surface was laid out,
-        // and spice-gtk flips only for bottom-up streams. The clip is the current one, as in spice-gtk: a STREAM_CLIP
-        // that arrived while this frame waited keeps it off whatever was drawn over the stream since.
-        try { Canvas.BlitFrame(s.SurfaceId, dest, s.Clip, s.Frame.View, s.TopDown); }
+        else { CountDrop(s, window); return; } // not reached: such a stream is Unsupported from its creation
+        var output = _videoOutput ??= new VideoOutput(this);
+        output.Prepare(s, dest, bottomUp: !s.TopDown);
+        VideoDecodeResult r;
+        bool mirrored = false;
+        try { r = decoder.Decode(data, output); mirrored = output.Mirrored; }
+        catch (Exception e) when (s.Decoder is not null)
+        {
+            // A hardware decoder's failure (a lost device, a driver error) ends this stream, not the session.
+            Log.Error($"display: stream {s.Id} decoder: {e.Message}");
+            r = VideoDecodeResult.Failed;
+        }
+        finally { output.Prepare(null, default, false); }
+        switch (r)
+        {
+            case VideoDecodeResult.Picture: s.Pictured = true; break;
+            case VideoDecodeResult.NoPicture: return;
+            case VideoDecodeResult.Dropped: CountDrop(s, window); return;
+            default: FailStream(s); return;
+        }
+        // The stream's TOP_DOWN flag describes how the source surface was laid out; spice-gtk flips the pictures of
+        // bottom-up streams, whatever their codec. The clip is the current one, as in spice-gtk: a STREAM_CLIP that
+        // arrived while this frame waited keeps it off whatever was drawn over the stream since.
+        try { Canvas.BlitFrame(s.SurfaceId, dest, s.Clip, s.Frame!.View, s.TopDown || mirrored); }
         catch (CanvasException e) { CountDrop(s, window); Log.Warn($"display: stream frame dropped: {e.Message}"); }
+    }
+
+    /// <summary>
+    /// Under _streamLock (from <see cref="VideoOutput.Begin"/>): the stream's reused picture, resized to
+    /// <paramref name="w"/>×<paramref name="h"/> if needed, or null when that is impossible or over the frame budget.
+    /// </summary>
+    internal DecodedImage? StreamFrameBuffer(object stream, int w, int h)
+    {
+        var s = (VideoStream)stream;
+        if (w <= 0 || h <= 0 || w > Spice.Canvas.Canvas.MaxStreamSide || h > Spice.Canvas.Canvas.MaxStreamSide) return null;
+        if (s.Frame is { } current && current.Width == w && current.Height == h) return current;
+        s.Frame?.Release();
+        s.Frame = null;
+        long held = 0;
+        foreach (var other in _streams.Values) if (other.Frame is { } f) held += (long)f.Stride * f.Height;
+        if (held + (long)w * h * 4 > MaxStreamFrameBytes) { Log.Warn($"display: stream frame {w}x{h} exceeds the frame budget"); return null; }
+        s.Frame = new DecodedImage(w, h, false);
+        return s.Frame;
     }
 
     void SendStreamReport(uint id, VideoStream s)
@@ -627,7 +935,7 @@ public sealed partial class SpiceSession
             _pacingStopped = true;
             _wakeArmed = false;
             _pacing.Dispose();
-            foreach (var s in _streams.Values) { DiscardQueue(s); s.Frame?.Release(); }
+            foreach (var s in _streams.Values) { DiscardQueue(s); s.Frame?.Release(); DisposeDecoder(s); }
             _streams.Clear();
             ClearFramePool();
             _mjpeg?.Dispose();

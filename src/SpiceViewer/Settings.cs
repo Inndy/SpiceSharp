@@ -82,6 +82,68 @@ sealed class ImageCompressionModeConverter : JsonConverter<ImageCompressionMode>
 }
 
 /// <summary>
+/// The video codec order asked of the server (docs/decisions/0037): <c>auto</c> prefers the codecs decoded in hardware
+/// here (H.264, then VP9, then HEVC), <c>server</c> asks for nothing, and a codec name puts that codec first. An unknown
+/// value reads as <c>auto</c>.
+/// </summary>
+enum VideoCodecMode
+{
+    [JsonStringEnumMemberName("auto")] Auto,
+    [JsonStringEnumMemberName("server")] Server,
+    [JsonStringEnumMemberName("mjpeg")] Mjpeg,
+    [JsonStringEnumMemberName("h264")] H264,
+    [JsonStringEnumMemberName("vp9")] Vp9,
+    [JsonStringEnumMemberName("h265")] H265,
+}
+
+static class VideoCodecModes
+{
+    /// <summary>
+    /// The codec order asked of the server (docs/decisions/0037, provisional): automatic names the hardware-decoded
+    /// codecs, H.264 first, so the server prefers them over its own MJPEG-first list; a chosen codec goes first, followed
+    /// by the automatic order; server default asks for nothing (null). The session sends only the codecs it advertises.
+    /// </summary>
+    public static VideoCodecType[]? ServerOrder(this VideoCodecMode mode) => mode switch
+    {
+        VideoCodecMode.Server => null,
+        VideoCodecMode.Mjpeg => [VideoCodecType.Mjpeg],
+        VideoCodecMode.H264 => [VideoCodecType.H264, VideoCodecType.Vp9, VideoCodecType.H265],
+        VideoCodecMode.Vp9 => [VideoCodecType.Vp9, VideoCodecType.H264, VideoCodecType.H265],
+        VideoCodecMode.H265 => [VideoCodecType.H265, VideoCodecType.H264, VideoCodecType.Vp9],
+        _ => [VideoCodecType.H264, VideoCodecType.Vp9, VideoCodecType.H265],
+    };
+}
+
+/// <summary>Reads <see cref="VideoCodecMode"/> leniently, as <see cref="VideoPacingModeConverter"/> does.</summary>
+sealed class VideoCodecModeConverter : JsonConverter<VideoCodecMode>
+{
+    public override VideoCodecMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String) { reader.Skip(); return VideoCodecMode.Auto; }
+        return reader.GetString()?.Trim().ToLowerInvariant() switch
+        {
+            "server" => VideoCodecMode.Server,
+            "mjpeg" => VideoCodecMode.Mjpeg,
+            "h264" => VideoCodecMode.H264,
+            "vp9" => VideoCodecMode.Vp9,
+            "h265" or "hevc" => VideoCodecMode.H265,
+            _ => VideoCodecMode.Auto,
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, VideoCodecMode value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            VideoCodecMode.Server => "server",
+            VideoCodecMode.Mjpeg => "mjpeg",
+            VideoCodecMode.H264 => "h264",
+            VideoCodecMode.Vp9 => "vp9",
+            VideoCodecMode.H265 => "h265",
+            _ => "auto",
+        });
+}
+
+/// <summary>
 /// Reads an off-by-default switch leniently: <c>true</c> (or the string "true") is on; anything else, including a value
 /// of another type, is off instead of making the whole file unusable.
 /// </summary>
@@ -118,6 +180,9 @@ sealed class ViewerSettings
     public bool FastJpeg { get; set; }
     [JsonConverter(typeof(ImageCompressionModeConverter))]
     public ImageCompressionMode ImageCompression { get; set; } = ImageCompressionMode.Auto;
+    /// <summary>Video codec order asked of the server (docs/decisions/0037).</summary>
+    [JsonConverter(typeof(VideoCodecModeConverter))]
+    public VideoCodecMode VideoCodec { get; set; } = VideoCodecMode.Auto;
     /// <summary>Keyed by <see cref="SettingsStore.VmKey"/>.</summary>
     public Dictionary<string, VmWindowState> Vms { get; set; } = new(StringComparer.Ordinal);
 }
@@ -309,6 +374,7 @@ sealed class SettingsStore(string directory)
         if (!Enum.IsDefined(s.SystemShortcuts)) s.SystemShortcuts = ShortcutMode.Always;
         if (!Enum.IsDefined(s.VideoPacing)) s.VideoPacing = VideoPacingMode.Off;
         if (!Enum.IsDefined(s.ImageCompression)) s.ImageCompression = ImageCompressionMode.Auto;
+        if (!Enum.IsDefined(s.VideoCodec)) s.VideoCodec = VideoCodecMode.Auto;
         var vms = new Dictionary<string, VmWindowState>(StringComparer.Ordinal);
         if (s.Vms is not null)
             foreach (var (key, vm) in s.Vms)

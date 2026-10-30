@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Window-free tests of the viewer's hardware video decoders (docs/decisions/0037): the Media Foundation decoder and the
+    D3D11 video processor run on a headless device; no window, swap chain or desktop is used. The decoder sources are
+    compiled here directly, with their own CsWin32 bindings, as Spice.Viewer.Tests does for its production files.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.367" PrivateAssets="all" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/SpiceViewer/Video/*.cs" Link="Production/%(Filename)%(Extension)" />
+    <!-- The videoCodec setting and its server order: pure functions over settings.json. -->
+    <Compile Include="../../src/SpiceViewer/Settings.cs" Link="Production/Settings.cs" />
+    <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
+    <AdditionalFiles Include="../../src/SpiceViewer/NativeMethods.json" />
+    <AdditionalFiles Include="../../src/SpiceViewer/Video/NativeMethods.txt" Link="Production/NativeMethods.txt" />
+    <ProjectReference Include="../../src/Spice.Session/Spice.Session.csproj" />
+  </ItemGroup>
+  <Import Project="../../native/NativeDlls.targets" Condition="Exists('../../native/NativeDlls.targets')" />
+</Project>

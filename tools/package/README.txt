@@ -54,7 +54,7 @@ Keys (defaults; a .vv file may override them)
   The window menu (right-click the title bar) has Send Ctrl+Alt+Del, Send Win+L,
   scaling (fit / 1:1), when to capture system shortcuts, resize guest to window,
   "Show guest cursor in server mouse mode", "Video pacing", "Fast JPEG decoding",
-  "Image compression", and About.
+  "Image compression", "Video codec", and About.
 
 Video pacing (window menu, saved for all VMs): how guest video streams are timed.
   Off (default)            every frame is drawn as soon as it arrives: the lowest latency
@@ -74,6 +74,29 @@ Image compression (window menu, saved for all VMs):
                               network bandwidth; best on a fast local network. Sent at once
                               if the server supports it; going back to "Server default"
                               takes effect from the next connection.
+
+Video codec (window menu, saved for all VMs): which codec the server should use for video.
+  Guest video arrives as MJPEG, decoded on the CPU, or as H.264, VP9 or HEVC, decoded by the
+  graphics card. A codec is offered only if this PC's graphics card and Windows can decode it
+  in hardware; the others are grayed out. VP9 and HEVC usually need Microsoft's "VP9 Video
+  Extensions" and "HEVC Video Extensions" from the Microsoft Store. About lists what this PC
+  decodes. Windows N editions without the Media Feature Pack use MJPEG only.
+  Automatic (default)  asks for H.264, then VP9, then HEVC, whichever this PC decodes in
+                       hardware: much less bandwidth than MJPEG, but more CPU on the server.
+                       Without hardware decoding it asks for nothing.
+  Server default       asks for nothing; the server then usually uses MJPEG.
+  MJPEG                asks for MJPEG.
+  H.264, VP9, HEVC     asks for that codec first. SPICE servers send HEVC only through
+                       spice-streaming-agent, which this viewer doesn't use.
+  An unmodified SPICE server (Proxmox's included) encodes H.264, and likely VP9, in a
+  full-colour (4:4:4) format that the hardware decoders used here can't take. The viewer sees this
+  on the first stream and
+  asks for MJPEG for the rest of the connection (viewer.log says so). The host administrator can
+  set SPICE_CONVERTER_PREFERRED_FORMAT=I420 in the VM's QEMU environment to get 4:2:0 instead.
+  A change is sent at once if the server supports it and applies to the next video stream;
+  going back to "Server default" takes effect from the next connection. Video streams are sent
+  only when video streaming is enabled in the VM's SPICE settings.
+
 
 PVE launcher (PveLauncher\PveLauncher.exe)
 ------------------------------------------
