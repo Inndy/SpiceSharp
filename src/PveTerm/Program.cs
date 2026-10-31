@@ -15,27 +15,30 @@ static class Program
         PveTerm - a Proxmox VE text console in your own terminal, or a VM's display in your own VNC viewer.
 
         Usage:
-          PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|none]
+          PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|none] [--auto-stty]
 
         Runs the session in this console (Windows Terminal, conhost, or any console host). A launcher creates the
         pipe and passes NAME and HEX; the connection data and its secrets travel only through the pipe.
         --keepalive sets the idle time before a termproxy ping (default 240; 0 disables).
-        --escape sets the escape character (default ~; not . or ?): at the start of a line, ~. quits, ~~ sends ~
-        and ~? lists the escapes. 'none' turns the escape off.
+        --escape sets the escape character (default ~; not ., ? or r): at the start of a line, ~. quits, ~~ sends ~,
+        ~r types "stty rows R cols C" and Enter with the window's size (VM serial consoles, which can't learn it
+        otherwise) and ~? lists the escapes. 'none' turns the escape off.
+        --auto-stty types that stty line after every window resize too, whatever the guest is running (VM serial
+        consoles only; node shells and containers follow the window already).
 
         """ + VncCommand.Usage;
 
     static async Task<int> Main(string[] args)
     {
         if (args.Length > 0 && args[0] == "vnc") return await VncCommand.RunAsync(args);
-        if (!TryParse(args, out var pipe, out var nonce, out var keepAlive, out var escape))
+        if (!TryParse(args, out var pipe, out var nonce, out var keepAlive, out var escape, out bool autoStty))
         {
             Console.Error.WriteLine(Usage);
             return ExitUsage;
         }
         if (escape is { } esc && EscapeFilter.IsCommand(esc))
         {
-            Console.Error.WriteLine($"PveTerm: --escape {esc} would make {esc}{esc} ambiguous: '.' and '?' are escape commands. Pick another character.");
+            Console.Error.WriteLine($"PveTerm: --escape {esc} would make {esc}{esc} ambiguous: '.', '?' and 'r' are escape commands. Pick another character.");
             return ExitUsage;
         }
 
@@ -52,7 +55,10 @@ static class Program
         }
 
         ConsoleFrontEnd front;
-        try { front = ConsoleFrontEnd.Open(d.DisplayName, escape); }
+        // A VM's termproxy is always a serial port: the guest's tty learns no window size from termproxy's resize,
+        // so ~r (and --auto-stty) type it as an stty line. Node shells and containers get the resize; ignored there.
+        bool serial = d.Target == TermTarget.Qemu;
+        try { front = ConsoleFrontEnd.Open(d.DisplayName, escape, serial, serial && autoStty); }
         catch (FrontEndException e)
         {
             Console.Error.WriteLine("PveTerm: " + e.Message);
@@ -86,9 +92,10 @@ static class Program
         return ExitOk;
     }
 
-    static bool TryParse(string[] args, out string pipe, out string nonce, out TimeSpan keepAlive, out char? escape)
+    static bool TryParse(string[] args, out string pipe, out string nonce, out TimeSpan keepAlive, out char? escape, out bool autoStty)
     {
         pipe = nonce = "";
+        autoStty = false;
         keepAlive = TermproxyChannel.DefaultKeepAlive;
         escape = '~';
         if (args.Length == 0 || args[0] != "console") return false;
@@ -104,6 +111,7 @@ static class Program
                     i++;
                     break;
                 case "--escape" when value == "none": escape = null; i++; break;
+                case "--auto-stty": autoStty = true; break;
                 // One visible character; Enter, Space and control characters would make typing ambiguous.
                 case "--escape" when value is [var e] && !char.IsControl(e) && !char.IsWhiteSpace(e) && !char.IsSurrogate(e):
                     escape = e;

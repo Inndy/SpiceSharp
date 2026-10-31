@@ -69,9 +69,10 @@ static class Program
         if (vv.IgnoredKeys.Count > 0) Log.Debug($"vv: ignored keys {string.Join(", ", vv.IgnoredKeys)}");
 
         // Hardware video decoders are probed in the background while the channels link (docs/decisions/0037); software
-        // H.264 takes the streams they refuse. The softwareVideo setting is applied before the probe answers.
+        // H.264 takes the streams they refuse. Advertising waits until the window applies the saved softwareVideo
+        // setting (review AF-R2); the connection itself starts at once.
         HardwareVideo = new Video.HardwareVideo();
-        Video = new Spice.Session.VideoDecoderRouter(HardwareVideo, new Spice.Session.SoftwareVideo());
+        Video = new Spice.Session.VideoDecoderRouter(HardwareVideo, new Spice.Session.SoftwareVideo(), awaitSoftwareSetting: true);
         var window = new MainWindow(vv);
         // Connect before any other UI work: the ticket expires quickly.
         window.StartSession();

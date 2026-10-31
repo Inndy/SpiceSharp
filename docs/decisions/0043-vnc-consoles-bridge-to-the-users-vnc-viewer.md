@@ -105,9 +105,19 @@
     | UltraVNC (GPL) | `Ultravnc2_is1` InstallLocation, `%ProgramFiles%\uvnc bvba\UltraVNC\` (installer script) and `%ProgramFiles%\uvnc\UltraVNC\` (winget) | `-AllowUntrustedServers` (else it asks whether a server without authentication can be trusted) | no (keysyms) | |
     | RealVNC Viewer 7 (proprietary) | `%ProgramFiles%\RealVNC\VNC Viewer\vncviewer.exe`, `%ProgramFiles%\VNC Viewer\vncviewer.exe` (paths unverified) | `-WarnUnencrypted=FALSE` (documented) | unverified | RealVNC Connect 8 needs a RealVNC account and a paid plan for third-party servers: unsupported |
 
-    - **Automatic** picks the first found in that order. TigerVNC comes first because only it sends scancodes
-      through QEMU's extended key events, so layouts and keys without a keysym behave as in the SPICE viewer. The
-      user README recommends it.
+    - **Automatic** picks the first found in this order, by how usable and robust each viewer is (the human,
+      2026-10-31: "按照 VNC client 好用與穩健性排序", RealVNC kept in the list), not the table's order:
+      1. **TigerVNC**: the only one that sends scancodes through QEMU's extended key events, so layouts and keys
+         without a keysym behave as in the SPICE viewer; actively maintained (1.16.x); takes the None server
+         without asking. The user README recommends it.
+      2. **UltraVNC**: maintained (1.8.x releases); sends keysyms; needs `-AllowUntrustedServers`, which the bridge
+         passes, so it too connects without a prompt.
+      3. **TightVNC 2.x**: works, keysyms only; the GPL 2.x line is the older one (development continues in the
+         closed 4.x, which is unverified here), so it ranks below UltraVNC.
+      4. **RealVNC Viewer 7**: last. It is closed source, and its install paths and whether it accepts a None server
+         silently are taken from help pages only (unverified); Connect 8 can't reach third-party servers without a
+         paid plan. It stays in the automatic list so a user who has only it still gets a viewer.
+      The order was TigerVNC, TightVNC, UltraVNC, RealVNC before the human's answer.
     - A **custom command** (`-- COMMAND ARG...`) takes the placeholders `{host}`, `{port}`, `{hostport}`
       (`127.0.0.1::PORT`) and `{title}`.
     - **None** starts nothing and prints the address.
@@ -180,5 +190,5 @@
    that.
 3. The 10-minute keep-alive stays.
 4. RealVNC stays in the automatic list; the order is by how usable and robust each viewer is ("按照 VNC client
-   好用與穩健性排序").
+   好用與穩健性排序"). Done: TigerVNC, UltraVNC, TightVNC 2.x, RealVNC Viewer 7 (reasons under "Viewers" above).
 5. "Open VNC console" stays for every qemu VM, SPICE or not.

@@ -41,7 +41,19 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
     int _decoders; // under _lock: open decoders, made or being made
 
     /// <summary>Starts the probe in the background. One instance per process; the viewer makes it before connecting.</summary>
-    public HardwareVideo() => Codecs = Task.Run(Probe);
+    public HardwareVideo() : this(softwareAdapter: false) { }
+
+    /// <summary>
+    /// <paramref name="softwareAdapter"/>: probe as on a software adapter (as <c>SPICEVIEWER_FORCE_WARP=1</c> does),
+    /// so nothing decodes in hardware. For tests, which can't set the process-wide variable safely.
+    /// </summary>
+    internal HardwareVideo(bool softwareAdapter)
+    {
+        _softwareAdapter = softwareAdapter;
+        Codecs = Task.Run(Probe);
+    }
+
+    readonly bool _softwareAdapter;
 
     public Task<IReadOnlyList<VideoCodecType>> Codecs { get; }
 
@@ -67,24 +79,27 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
         public void Dispose() { if (_initialized) PInvoke.CoUninitialize(); }
     }
 
+    /// <summary>The probe found nothing: software H.264 (VideoDecoderRouter) may still be advertised (decision 0037).</summary>
+    const string NoHardware = "no hardware video decoding (H.264 can still be decoded in software)";
+
     IReadOnlyList<VideoCodecType> Probe()
     {
         var clock = Stopwatch.StartNew();
-        if (Environment.GetEnvironmentVariable("SPICEVIEWER_FORCE_WARP") == "1")
+        if (_softwareAdapter || Environment.GetEnvironmentVariable("SPICEVIEWER_FORCE_WARP") == "1")
         {
-            Log.Info("video: software profile (SPICEVIEWER_FORCE_WARP): MJPEG only");
+            Log.Info($"video: software profile (SPICEVIEWER_FORCE_WARP): {NoHardware}");
             return [];
         }
         using var com = new ComScope();
         try
         {
             var hr = PInvoke.MFStartup(Mf.Version, Mf.StartupLite);
-            if (hr.Failed) { Log.Info($"video: Media Foundation is not available ({hr}); MJPEG only"); return []; }
+            if (hr.Failed) { Log.Info($"video: Media Foundation is not available ({hr}); {NoHardware}"); return []; }
         }
         catch (Exception e) when (e is DllNotFoundException or EntryPointNotFoundException)
         {
             // Windows N and Server without the Media Foundation feature have no mfplat.dll.
-            Log.Info($"video: Media Foundation is not installed ({e.GetType().Name}); MJPEG only");
+            Log.Info($"video: Media Foundation is not installed ({e.GetType().Name}); {NoHardware}");
             return [];
         }
         ID3D11Device* device = null;
@@ -92,8 +107,8 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
         {
             device = CreateDevice(out string adapter, out bool software);
             AdapterName = adapter;
-            if (device is null) { Log.Info("video: no hardware Direct3D 11 device with video support; MJPEG only"); return []; }
-            if (software) { Log.Info($"video: '{adapter}' is a software adapter; MJPEG only"); return []; }
+            if (device is null) { Log.Info($"video: no hardware Direct3D 11 device with video support; {NoHardware}"); return []; }
+            if (software) { Log.Info($"video: '{adapter}' is a software adapter; {NoHardware}"); return []; }
             var found = new List<VideoCodecType>();
             var profiles = AdapterProfiles(device);
             foreach (var c in Known)
@@ -124,7 +139,7 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
         }
         catch (Exception e)
         {
-            Log.Warn($"video: probe failed: {e.Message}; MJPEG only");
+            Log.Warn($"video: probe failed: {e.Message}; {NoHardware}");
             return [];
         }
         finally { Mf.Release(ref device); }

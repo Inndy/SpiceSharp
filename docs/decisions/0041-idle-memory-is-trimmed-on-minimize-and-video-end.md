@@ -1,8 +1,8 @@
 # 0041. Idle memory is trimmed when the window is minimized and when the last video stream ends
 
-- Status: Proposed
+- Status: Accepted; amended 2026-10-31 (no forced collection)
 - Date: 2026-10-31
-- Decided by: agent (spec silent), not yet reviewed
+- Decided by: the human (2026-10-31, agentdesk): keep the trim, no forced GC.Collect
 
 - **Context:**
   - Finding K1 of [2026-10-30-v0-dod.md](../verification/2026-10-30-v0-dod.md): after a busy period the idle viewer
@@ -28,31 +28,36 @@
   - **`SpiceSession.TrimMemory(reason, force)`.** The steps, in order:
     1. trim the GLZ pool;
     2. trim `PixelBuffers`;
-    3. run one `GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true)`. This frees the dropped
-       arrays and returns the GC's free space to the system.
-    4. log one line with the bytes released and the time taken.
+    3. log one line with the bytes released and the time taken.
+    - No collection is forced. The dropped arrays are garbage from then on, and the GC frees them (and returns its
+      free space to the system) when it decides to collect. The first version ran one blocking, compacting,
+      aggressive `GC.Collect(2)` here; the human dropped it on 2026-10-31.
   - **When it runs, on existing events only:**
     - the window is minimized (`force: true`);
     - the last video stream ends (STREAM_DESTROY of the last stream, or STREAM_DESTROY_ALL while streams existed).
       This is rate-limited: a trim that isn't forced is skipped within 30 s of the previous one, so streams that come
-      and go don't each pay for a collection and a re-warm. The check reads `Environment.TickCount64` at the event.
+      and go don't each pay for a re-warm. The check reads `Environment.TickCount64` at the event.
       No timer is involved.
-    - A request that arrives while another trim is running is skipped, forced or not, so two blocking collections
-      never run back to back (review K1-R1). The running trim does the same work.
+    - A request that arrives while another trim is running is skipped, forced or not (review K1-R1). The running
+      trim does the same work.
   - **What is never released:** GLZ window images, the image cache, palettes, surfaces and the stream frame of a
     live stream.
 - **Reason:**
-  - Measured on the AMD host:
+  - Measured on the AMD host, with the forced collection of the first version (without it, the arrays are released
+    at the GC's next gen-2 collection instead of at once, so the private-bytes drop can come later):
     - the K1 workload on win81 dropped from 161 MB to 128 MB on minimize;
     - a mixed workload dropped from 208 MB to 160 MB (the old build held 264 MB, minimized or not);
     - on win7, the MJPEG run dropped back to the connect level when the video ended.
   - The owned pool also reuses arrays better than the shared pool. Before any trim, a busy period leaves 34 MB of GC
     heap committed instead of 81 MB.
-  - A trim takes 0.7–7 ms, on the UI thread at minimize or on the display thread after a video. The only costs:
-    - the next busy period allocates its pools again, as after connect;
-    - the GC runs at a moment we choose.
+  - A trim took 0.7–7 ms with the forced collection, on the UI thread at minimize or on the display thread after a
+    video; without it, it only unlinks the arrays. The only cost: the next busy period allocates its pools again, as
+    after connect.
+  - Why no forced collection (the human): the GC decides when to collect. A blocking full collection on the UI or
+    display thread is a pause we would choose for it.
   - The pool's lock adds no allocation. The allocation tests stay at 0 B, and a new test checks warm rent and return.
 - **Rejected:**
+  - **A forced `GC.Collect` after the trim** (the first version): rejected by the human, 2026-10-31.
   - **GC settings.** Concurrent GC off, `GCgen0size` 4 MB and `GCConserveMemory` were tried. They changed the
     post-busy GC commit within the run-to-run noise (32–44 MB) and left the large native part alone. The GC heap is
     live pooled arrays, not gen-0 garbage, because the hot paths don't allocate.
@@ -75,4 +80,4 @@
 ## Answers (the human, 2026-10-31, through agentdesk)
 
 - Keep the trim (GLZ window, pooled pixel buffers) but drop the forced `GC.Collect`: the GC decides when to
-  collect. The record moves to Accepted when that change lands.
+  collect. Done: the record is Accepted and its body describes the trim without the collection.

@@ -47,9 +47,13 @@ public sealed class VncViewerProbe
 /// </summary>
 public static class VncViewers
 {
-    /// <summary>TigerVNC first: the only one of these that sends QEMU extended key events (scancodes), so keyboard
-    /// layouts and keys without a keysym work as with the SPICE viewer. TightVNC and UltraVNC send keysyms.</summary>
-    public static readonly VncViewerKind[] AutoOrder = [VncViewerKind.TigerVnc, VncViewerKind.TightVnc, VncViewerKind.UltraVnc, VncViewerKind.RealVnc];
+    /// <summary>
+    /// By how usable and robust each viewer is (the human, 2026-10-31; reasons in decision 0043): TigerVNC (the only
+    /// one that sends QEMU extended key events, so layouts and keys without a keysym work as with the SPICE viewer;
+    /// actively maintained), UltraVNC (maintained, 1.8.x), TightVNC 2.x (its maintained line is the closed 4.x),
+    /// RealVNC Viewer 7 (closed source; install path and None handling unverified, so last).
+    /// </summary>
+    public static readonly VncViewerKind[] AutoOrder = [VncViewerKind.TigerVnc, VncViewerKind.UltraVnc, VncViewerKind.TightVnc, VncViewerKind.RealVnc];
 
     public static string Name(VncViewerKind k) => k switch
     {

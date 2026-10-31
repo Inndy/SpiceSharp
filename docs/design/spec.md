@@ -334,7 +334,7 @@ Release the app under MIT, with the LGPL codecs isolated in a DLL users can repl
 | This client | MIT | Matches SpiceSee and keeps porting simple |
 | Code ported from SpiceSee | MIT | Keep SpiceSee's copyright notice |
 | QUIC, LZ and GLZ decoders | LGPL-2.1-or-later | Separate DLL with source and notices, replaceable by users |
-| FFmpeg libavcodec H.264 decoder and libavutil | LGPL-2.1-or-later (configured without GPL or nonfree parts) | Linked statically into the same replaceable DLL; pinned source tarball, build scripts and notices ship with it |
+| FFmpeg libavcodec H.264 decoder and libavutil | LGPL-2.1-or-later (configured without GPL or nonfree parts) | Linked statically into the same replaceable DLL; build scripts and notices ship with it, and the notices name the pinned source tarball (version, URL, SHA-256), the configure arguments and any patches (the human, 2026-10-31) |
 | libjpeg-turbo | BSD-style (IJG and BSD) | Notice in the About screen |
 | libopus | BSD | Notice in the About screen |
 

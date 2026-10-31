@@ -555,7 +555,7 @@ sealed unsafe partial class MainWindow
         AppendItem(codec, IdCodecVp9, "VP9");
         AppendItem(codec, IdCodecH265, "HEVC");
         AppendItem(codec, 0, null);
-        AppendItem(codec, IdSoftwareVideo, "Decode H.264 4:4:4 in software (more CPU, less bandwidth)");
+        AppendItem(codec, IdSoftwareVideo, "Decode H.264 in software when the graphics card can't (more CPU, less bandwidth)");
 
         AppendItem(_sysMenu, 0, null);
         AppendItem(_sysMenu, IdCtrlAltDel, "Send Ctrl+Alt+Del");

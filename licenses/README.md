@@ -28,7 +28,12 @@ package stays in that one replaceable DLL.
 `tools/package.ps1` writes one `LICENSE.txt` into the zip: SpiceViewer's license, a list of every component built
 into the package (version, file it is in, license, upstream), then each full license text. It also ships every
 committed file under `native/` as `source\native`, the complete source and build scripts of the LGPL
-`spicecodec.dll`.
+`spicecodec.dll`. FFmpeg's source tarball is not in the zip (the human, 2026-10-31, decision 0037): `fetch.sh`
+downloads it, and the FFmpeg entry of `LICENSE.txt` names the release (9.0.2), its URL
+(`https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz`), its SHA-256
+(`8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`), the configure arguments from `build.sh`, and
+the patches applied: none. `tools/package.ps1` reads the URL and hash from `fetch.sh` and the arguments from
+`build.sh`, so the notice follows them.
 
 | Component | In | License | Text from |
 |---|---|---|---|

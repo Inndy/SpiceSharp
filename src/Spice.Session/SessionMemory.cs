@@ -15,14 +15,13 @@ public sealed partial class SpiceSession
 
     /// <summary>
     /// Gives back memory a busy period left behind and an idle session doesn't use (docs/decisions/0041): the GLZ
-    /// window's reuse pool, the spare pixel buffers of <see cref="PixelBuffers"/>, then one blocking compacting GC in
-    /// aggressive mode, which frees those buffers and returns the GC's free space to the system. What the protocol
-    /// needs stays: the GLZ window's images, the image cache, the surfaces. Called only on events (the window is
-    /// minimized or hidden, the last video stream ended), never on a timer. Unless <paramref name="force"/>, a trim
-    /// within <see cref="MinTrimIntervalMs"/> of the previous one is skipped, so streams that come and go don't each
-    /// pay for a collection and a re-warm. A request that arrives while another trim runs, forced or not, is skipped:
-    /// the running trim does the same work, and two blocking collections back to back would reclaim little (review
-    /// K1-R1). Any thread; returns false when skipped.
+    /// window's reuse pool and the spare pixel buffers of <see cref="PixelBuffers"/>. No collection is forced: the
+    /// dropped buffers become garbage and the GC frees them when it decides to. What the protocol needs stays: the GLZ
+    /// window's images, the image cache, the surfaces. Called only on events (the window is minimized or hidden, the
+    /// last video stream ended), never on a timer. Unless <paramref name="force"/>, a trim within
+    /// <see cref="MinTrimIntervalMs"/> of the previous one is skipped, so streams that come and go don't each pay for a
+    /// re-warm. A request that arrives while another trim runs, forced or not, is skipped: the running trim does the
+    /// same work (review K1-R1). Any thread; returns false when skipped.
     /// </summary>
     public bool TrimMemory(string reason, bool force = false)
     {
@@ -38,11 +37,10 @@ public sealed partial class SpiceSession
             long start = Stopwatch.GetTimestamp();
             long glz = Canvas.TrimGlzPool();
             long spare = PixelBuffers.Trim();
-            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-            var gc = GC.GetGCMemoryInfo();
-            Log.Info($"memory: trimmed ({reason}): GLZ reuse pool {Mb(glz)} MB, spare pixel buffers {Mb(spare)} MB; " +
-                $"GC heap {Mb(gc.HeapSizeBytes)} MB, {Mb(gc.TotalCommittedBytes)} MB committed; " +
-                $"{Stopwatch.GetElapsedTime(start).TotalMilliseconds:F1} ms");
+            // No forced collection (the human, 2026-10-31): the dropped arrays are garbage now; the GC frees them when
+            // it decides to.
+            Log.Info($"memory: trimmed ({reason}): GLZ reuse pool {Mb(glz)} MB, spare pixel buffers {Mb(spare)} MB " +
+                $"released to the GC; {Stopwatch.GetElapsedTime(start).TotalMilliseconds:F1} ms");
             RaiseStatusChanged();
             return true;
         }

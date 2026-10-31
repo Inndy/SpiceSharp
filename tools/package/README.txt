@@ -130,11 +130,13 @@ Video codec (window menu, saved for all VMs): which codec the server should use 
   MJPEG                asks for MJPEG.
   H.264, VP9, HEVC     asks for that codec first. SPICE servers send HEVC only through
                        spice-streaming-agent, which this viewer doesn't use.
-  Decode H.264 4:4:4 in software (on by default): an unmodified SPICE server (Proxmox's
-  included) encodes H.264 in a full-colour (4:4:4) format that graphics cards can't decode.
-  It is sharp (text and thin lines keep their colour), and the viewer decodes it on the CPU
-  with FFmpeg's H.264 decoder, using up to four threads; H.264 the graphics card takes stays
-  on the graphics card. On this program's test machine 1080p 4:4:4 H.264 took about as much
+  Decode H.264 in software when the graphics card can't (on by default): an unmodified SPICE
+  server (Proxmox's included) encodes H.264 in a full-colour (4:4:4) format that graphics cards
+  can't decode. It is sharp (text and thin lines keep their colour), and the viewer decodes it
+  on the CPU with FFmpeg's H.264 decoder, using up to four threads; H.264 the graphics card
+  takes stays on the graphics card. A PC without any H.264 decoder of its own (no graphics
+  card decoder, Remote Desktop's or the basic display renderer, Windows N without the Media
+  Feature Pack) still offers H.264 and decodes all of it on the CPU. On this program's test machine 1080p 4:4:4 H.264 took about as much
   CPU per frame as MJPEG of the same picture. Turn it off to spend bandwidth (MJPEG) instead of
   CPU: new video streams follow at once, and the codecs offered to the server change from the
   next connection. With it off, the viewer sees 4:4:4 on the first stream and asks for MJPEG
@@ -177,13 +179,14 @@ from the folder above it.
                yourself. PveTerm.exe (no window) signs in to the VM's VNC server and offers
                the session on a one-time port on 127.0.0.1; only a program running as you
                may connect, so no password is asked. Choose the viewer at the bottom right:
-                 Automatic (the default): the first installed of TigerVNC, TightVNC,
-                   UltraVNC and RealVNC Viewer. The list shows which one it will open.
+                 Automatic (the default): the first installed of TigerVNC, UltraVNC,
+                   TightVNC 2.x and RealVNC Viewer 7, best first. The list shows which
+                   one it will open.
                  TigerVNC (recommended, https://tigervnc.org): the only one of these that
                    sends keys as scancodes (QEMU's extended key events), so every key
                    works whatever the keyboard layout, as in SpiceViewer. The others send
                    characters, and some keys or layouts may not arrive as typed.
-                 TightVNC 2.x, UltraVNC, RealVNC Viewer 7: work too. RealVNC Connect 8
+                 UltraVNC, TightVNC 2.x, RealVNC Viewer 7: work too. RealVNC Connect 8
                    does not (it needs a RealVNC account to reach other servers).
                  None: nothing starts; the message above the list gives the address
                    (127.0.0.1::PORT) to connect your viewer to within a minute.
@@ -210,7 +213,8 @@ from the folder above it.
                    default terminal app.
                  Console host (conhost): the classic console window.
                In the terminal, type ~. at the start of a line to leave (~? lists the
-               escapes).
+               escapes). A VM's serial console can't learn the window's size: at its
+               shell prompt, ~r types "stty rows R cols C" and Enter with the current size.
   Refresh      F5 or the Refresh button. The list does not update by itself.
   Sign out     forgets the session in memory. "Forget saved..." deletes the remembered
                password or token secret of the selected server, or of all servers.
@@ -242,7 +246,8 @@ Files
   spicecodec.dll             SPICE QUIC/LZ/GLZ decoders and FFmpeg's H.264 decoder (libavcodec and
                              libavutil; LGPL-2.1-or-later), and the LZ4 decoder (BSD-2-Clause). You may
                              replace it with your own build; its full source and build scripts are in
-                             source\native (FFmpeg's pinned source tarball is downloaded by fetch.sh).
+                             source\native. FFmpeg's source is not included: fetch.sh downloads the
+                             pinned release, and LICENSE.txt names its URL, SHA-256 and build flags.
   turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
   opus.dll                   libopus (BSD-3-Clause)
   PveTerm.exe                Proxmox text consoles in your terminal, and the bridge to your VNC

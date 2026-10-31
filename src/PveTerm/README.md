@@ -12,15 +12,17 @@ zip, or `tools/pve-vv.py --term` for development. `Pve.Api.TerminalLauncher` is 
 ## Command line
 
 ```text
-PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|none]
+PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|none] [--auto-stty]
 ```
 
 - The launcher creates the named pipe `\\.\pipe\NAME` and passes NAME and a one-time HEX nonce. The connection data
   (API URL, target, API token or login cookie, optional pinned CA) travels only through that pipe. Neither the
   command line nor the disk ever holds a secret. `Pve.Term.HandoffServer` is the launcher side.
 - `--keepalive` sets the idle time before a termproxy ping: default 240 s, `0` turns it off.
-- `--escape` sets the escape character (default `~`, see below); `none` turns the escape off. `.` and `?` are
+- `--escape` sets the escape character (default `~`, see below); `none` turns the escape off. `.`, `?` and `r` are
   refused, since they are the escape's commands.
+- `--auto-stty` types `stty rows R cols C` and Enter into a VM serial console after every resize (see below); off by
+  default, ignored for node shells and containers.
 - Exit codes: 0 the session ended, 1 the connection failed, 2 bad arguments, 3 the hand-off failed, 4 no usable
   console.
 
@@ -57,14 +59,18 @@ Without any of them PveTerm opens in a new console. `python tools/wt_locate.py` 
   |---|---|
   | `~.` | quits PveTerm; the guest's shell keeps running |
   | `~~` | sends one `~` |
+  | `~r` | types `stty rows R cols C` and Enter with the window's size (VM serial consoles only) |
   | `~?` | shows the escapes |
 
   A `~` followed by any other key sends both. Nothing times out: a `~` at the start of a line waits for the next
   key. A plain paste counts as typing, so pasting text that contains Enter then `~.` quits, as it does in ssh. A
   bracketed paste (when the guest's shell or editor turned it on) is never read as an escape. Closing the window or
   tab also disconnects.
-- Resizing the window sends the new size. A serial console can't pass the size to the guest: run
-  `stty rows R cols C` (or xterm's `resize`) there.
+- Resizing the window sends the new size. A serial console can't pass the size to the guest by itself: at the
+  guest's shell prompt type `~r`, which types `stty rows R cols C` and Enter with the current size for you (or run
+  it, or xterm's `resize`, yourself). `--auto-stty` does the same after every resize; it is off by default because
+  the line is typed into whatever the guest is running (a login prompt, an editor), and nothing is sent at connect.
+  Node shells and container consoles follow the window already; there `~r` and `--auto-stty` do nothing.
 - The console's modes, code pages and title are put back when PveTerm exits.
 - A VM's serial port takes one client at a time. While another console (for example the web UI's) has it open,
   PveTerm connects but shows nothing until that one closes.

@@ -24,7 +24,8 @@ Sources are extracted into native/downloads, never vendored into version control
 Only `lib/lz4.c` of lz4 is compiled, statically into spicecodec.dll. FFmpeg's tarball
 (`ffmpeg-9.0.2.tar.xz` from ffmpeg.org) was checked against its `.asc` signature with the
 FFmpeg release signing key (fingerprint `FCF9 86EA 15E6 E293 A564 4F10 B432 2F04 D676 58D8`)
-before its hash was pinned; the release zip ships that tarball in `source\native\downloads`.
+before its hash was pinned. The release zip doesn't ship the tarball: its LICENSE.txt names
+the release, URL, SHA-256, configure arguments and patches (none).
 
 Build order: `build.sh` builds libjpeg-turbo (`turbojpeg-static`) and opus as
 static libraries, then FFmpeg's `libavcodec.a` and `libavutil.a` with FFmpeg's own
@@ -187,8 +188,9 @@ See VENDORED.md for per-file origins, changes and reference comparisons, and
 The LGPL decoders stay in the replaceable spicecodec.dll. A release ships every
 committed file in this folder as source\native, so the DLLs can be rebuilt from
 it (fetch.sh downloads the pinned libjpeg-turbo, opus and lz4 sources), and one
-LICENSE.txt with every component's license text. FFmpeg's pinned tarball is in the zip too
-(`source\native\downloads`), where fetch.sh finds it, since FFmpeg's code is in the DLL. Modified LGPL files carry a
+LICENSE.txt with every component's license text. FFmpeg's tarball is not in the zip (the human,
+2026-10-31): fetch.sh downloads it, and LICENSE.txt names its URL, SHA-256, the configure arguments and
+the patches applied (none). Modified LGPL files carry a
 dated MODIFIED FILE notice (LGPL-2.1 section 2b); keep it current when editing
 them. The inherited GLZ malformed-back-reference allocation leak documented by
 SpiceSee was fixed by the 2026-10-29 safety patch (see VENDORED.md); this port

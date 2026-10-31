@@ -22,6 +22,7 @@ public static partial class Probe
 {
     public static int Main(string[] args)
     {
+        if (args is ["--answers-stty-probe"]) return AnswersFollowupsTests.RunSttyProbe();
         if (args is ["--review-console-nul"]) return PveTermReviewTests.InspectConsoleNul();
         if (args is ["--relay-allocation"]) return VncRelayAllocationTests.Run();
         if (args.Length >= 2 && args[0] == "--console-probe") return ConsoleProbe(args[1], args[2..]);

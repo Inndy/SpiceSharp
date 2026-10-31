@@ -21,15 +21,17 @@ public class VncViewerTests
     }
 
     [Fact]
-    public void AutomaticPrefersTigerVncThenTightThenUltraThenReal()
+    public void AutomaticPrefersTigerVncThenUltraThenTightThenReal()
     {
         string tiger = $@"{Pf}\TigerVNC\vncviewer.exe", tight = $@"{Pf}\TightVNC\tvnviewer.exe",
             ultra = $@"{Pf}\uvnc bvba\UltraVNC\vncviewer.exe", real = $@"{Pf}\RealVNC\VNC Viewer\vncviewer.exe";
         Assert.Equal(VncViewerKind.TigerVnc, VncViewers.Resolve(VncViewerKind.Auto, Probe([tiger, tight, ultra, real]))!.Kind);
-        Assert.Equal(VncViewerKind.TightVnc, VncViewers.Resolve(VncViewerKind.Auto, Probe([tight, ultra, real]))!.Kind);
-        Assert.Equal(VncViewerKind.UltraVnc, VncViewers.Resolve(VncViewerKind.Auto, Probe([ultra, real]))!.Kind);
+        // Decision 0043, the human (2026-10-31): by usability and robustness; RealVNC stays in the list, last.
+        Assert.Equal(VncViewerKind.UltraVnc, VncViewers.Resolve(VncViewerKind.Auto, Probe([tight, ultra, real]))!.Kind);
+        Assert.Equal(VncViewerKind.TightVnc, VncViewers.Resolve(VncViewerKind.Auto, Probe([tight, real]))!.Kind);
         Assert.Equal(real, VncViewers.Resolve(VncViewerKind.Auto, Probe([real]))!.Path);
-        Assert.Equal(4, VncViewers.Scan(Probe([tiger, tight, ultra, real])).Count);
+        Assert.Equal([VncViewerKind.TigerVnc, VncViewerKind.UltraVnc, VncViewerKind.TightVnc, VncViewerKind.RealVnc],
+            VncViewers.Scan(Probe([real, tight, ultra, tiger])).Select(v => v.Kind));
         // An explicit choice finds only that viewer.
         Assert.Null(VncViewers.Resolve(VncViewerKind.UltraVnc, Probe([tiger])));
     }

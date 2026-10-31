@@ -33,7 +33,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     /// <summary>The VNC viewer selector's items, in order (MainWindow.xaml, docs/decisions/0043).</summary>
     static readonly Pve.Term.VncViewerKind[] VncChoices =
-        [Pve.Term.VncViewerKind.Auto, Pve.Term.VncViewerKind.TigerVnc, Pve.Term.VncViewerKind.TightVnc, Pve.Term.VncViewerKind.UltraVnc,
+        [Pve.Term.VncViewerKind.Auto, Pve.Term.VncViewerKind.TigerVnc, Pve.Term.VncViewerKind.UltraVnc, Pve.Term.VncViewerKind.TightVnc,
          Pve.Term.VncViewerKind.RealVnc, Pve.Term.VncViewerKind.None, Pve.Term.VncViewerKind.Custom];
 
     public ObservableCollection<ServerItem> Servers { get; } = [];

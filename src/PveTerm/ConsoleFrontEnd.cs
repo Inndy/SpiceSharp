@@ -38,12 +38,18 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
     readonly char[] _typed = new char[512];
     readonly byte[] _typedUtf8 = new byte[512 * 3 + 4];
     readonly EscapeFilter _escape;
+    /// <summary>The target is a VM serial port (<c>~r</c> types stty), and <c>--auto-stty</c> asked for it on each resize.</summary>
+    readonly bool _serial, _autoStty;
+    readonly byte[] _stty = new byte[64];
+    (int Cols, int Rows) _lastStty;
 
-    ConsoleFrontEnd(SafeFileHandle input, SafeFileHandle output, EscapeFilter escape)
+    ConsoleFrontEnd(SafeFileHandle input, SafeFileHandle output, EscapeFilter escape, bool serial, bool autoStty)
     {
         _in = input;
         _out = output;
         _escape = escape;
+        _serial = serial;
+        _autoStty = serial && autoStty;
     }
 
     /// <summary>Why the session ends when the user types the quit escape.</summary>
@@ -51,7 +57,9 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
 
     /// <summary>Opens this process's console; fails when there is none.</summary>
     /// <param name="escape">The input escape (<c>~.</c> and friends), or null for none.</param>
-    public static ConsoleFrontEnd Open(string title, char? escape)
+    /// <param name="serial">The console is a VM serial port: <c>~r</c> types <c>stty rows R cols C</c>.</param>
+    /// <param name="autoStty">Also type it after every resize (<c>--auto-stty</c>); only with <paramref name="serial"/>.</param>
+    public static ConsoleFrontEnd Open(string title, char? escape, bool serial = false, bool autoStty = false)
     {
         var input = OpenDevice("CONIN$");
         var output = OpenDevice("CONOUT$");
@@ -61,7 +69,7 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
             output.Dispose();
             throw new FrontEndException("PveTerm needs a console: start it in Windows Terminal, conhost or another console host.");
         }
-        var fe = new ConsoleFrontEnd(input, output, new EscapeFilter(escape));
+        var fe = new ConsoleFrontEnd(input, output, new EscapeFilter(escape), serial, autoStty);
         char* buffer = stackalloc char[1024];
         Marshal.SetLastPInvokeError(0);
         uint length = PInvoke.GetConsoleTitle(new PWSTR(buffer), 1024);
@@ -161,6 +169,7 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
                 if (!PInvoke.ReadConsoleInput((HANDLE)_in.DangerousGetHandle(), records, (uint)_records.Length, &count))
                     return "the terminal closed its input";
             int typed = 0;
+            bool resized = false;
             for (int i = 0; i < count; i++)
             {
                 ref var rec = ref _records[i];
@@ -181,7 +190,8 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
                         Send(channel, typed);
                         typed = 0;
                         if (command == EscapeCommand.Quit) return QuitReason;
-                        Status(_escape.HelpText);
+                        if (command == EscapeCommand.Stty) SendStty(channel, force: true);
+                        else Status(_escape.HelpText);
                     }
                 }
                 else if (rec.EventType == WindowBufferSizeEventType)
@@ -189,9 +199,13 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
                     Send(channel, typed);
                     typed = 0;
                     if (WindowSize() is var (cols, rows)) Bridge.Wait(channel.ResizeAsync(cols, rows));
+                    resized = true;
                 }
             }
             Send(channel, typed);
+            // --auto-stty: one stty line per batch of input records (a drag delivers several size events), and only
+            // when the size differs from the last one typed.
+            if (resized && _autoStty) SendStty(channel, force: false);
         }
     }
 
@@ -202,6 +216,26 @@ sealed unsafe class ConsoleFrontEnd : IFrontEnd
         const uint Ctrl = 0x4 | 0x8, Alt = 0x1 | 0x2; // RIGHT/LEFT_CTRL_PRESSED, RIGHT/LEFT_ALT_PRESSED
         return (key.dwControlKeyState & Ctrl) != 0 && (key.dwControlKeyState & Alt) == 0
             && key.wVirtualKeyCode is VkSpace or Vk2;
+    }
+
+    /// <summary>
+    /// Types <c>stty rows R cols C</c> and Enter with the window's size into a VM serial console, whose guest tty
+    /// can't learn the size otherwise (decision 0036). Formatted into a fixed buffer: nothing allocated. On any other
+    /// console it sends nothing and says why.
+    /// </summary>
+    void SendStty(ITermChannel channel, bool force)
+    {
+        if (!_serial)
+        {
+            Status($"{_escape.Character}r is for VM serial consoles; this console already follows the window size.");
+            return;
+        }
+        if (WindowSize() is not var (cols, rows)) return;
+        if (!force && _lastStty == (cols, rows)) return;
+        if (!System.Text.Unicode.Utf8.TryWrite(_stty, $"stty rows {rows} cols {cols}\r", out int n)) return;
+        _lastStty = (cols, rows);
+        Bridge.Wait(channel.SendAsync(_stty.AsMemory(0, n)));
+        _escape.LineSent(); // the line ended with Enter: ~r and ~. work at the guest's new line (review AF-R1)
     }
 
     void Send(ITermChannel channel, int chars)

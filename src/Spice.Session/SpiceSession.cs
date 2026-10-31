@@ -182,7 +182,7 @@ public sealed partial class SpiceSession : IAsyncDisposable
                 codecs = [.. list.Where(c => c != VideoCodecType.Mjpeg && ClientMsg.CodecCap(c) >= 0).Distinct()];
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception e) { Log.Warn($"display: no hardware video decoders ({e.Message}); advertising MJPEG only"); }
+            catch (Exception e) { Log.Warn($"display: the video decoders did not answer ({e.Message}); advertising MJPEG only"); }
         }
         Volatile.Write(ref _videoCodecs, codecs);
         Log.Info($"display: video codecs advertised: MJPEG{string.Concat(codecs.Select(c => $", {c}"))}");

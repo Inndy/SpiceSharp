@@ -292,7 +292,9 @@ release, also signed, extracts to an identical tree. The hash was then checked a
 `build.sh` configures it with only the H.264 decoder and parser, without `--enable-gpl` or `--enable-nonfree` (the
 configure line is in README.md), and builds `libavcodec.a` and `libavutil.a`, which spicecodec.dll links statically, so
 all LGPL code stays in that one replaceable DLL. `--gc-sections` drops what the H.264 decoder doesn't reach. No FFmpeg
-file is changed, so no `MODIFIED FILE` notice applies; the release zip ships the tarball itself.
+file is changed, so no `MODIFIED FILE` notice applies and there are no patches. The release zip doesn't ship the
+tarball (the human, 2026-10-31, decision 0037): its `LICENSE.txt` names the release, the URL, the SHA-256 above (read
+from `fetch.sh`), the configure arguments (read from `build.sh`) and states that no FFmpeg file is patched.
 
 SpiceSharp additions (MIT, not vendored):
 

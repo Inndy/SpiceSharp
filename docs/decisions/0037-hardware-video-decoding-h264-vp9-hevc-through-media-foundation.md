@@ -197,15 +197,22 @@
 - **Decision:**
   - **Advertising:** H.264 is advertised when the hardware or the software path decodes it. The software path exists
     when spicecodec.dll exports the `sc_h264_*` functions and the `softwareVideo` setting is on. VP9 and HEVC stay
-    hardware only. Without Media Foundation or a hardware adapter (Windows N, Server, WARP), H.264 is still advertised
-    through software.
+    hardware only. Without any hardware H.264 decoder (no Media Foundation on Windows N or Server, a software adapter
+    such as WARP or the Basic Render Driver, an adapter without the profile), H.264 is still advertised whenever
+    spicecodec.dll has the FFmpeg decoder, and every H.264 stream decodes in software, 4:2:0 included (the human,
+    2026-10-31). The probe's log lines say "no hardware video decoding (H.264 can still be decoded in software)"
+    rather than "MJPEG only". With `softwareVideo` off, software adds nothing to what is advertised.
   - **Software decoder:** FFmpeg 9.0.2's libavcodec H.264 decoder with the libavutil it needs, configured LGPL-only
     (no `--enable-gpl` or `--enable-nonfree`, nothing but the H.264 decoder and parser) and linked statically into
     spicecodec.dll, so all LGPL code stays in that one replaceable DLL. The tarball is pinned by SHA-256 in
-    `native/fetch.sh` after its signature was checked (native/VENDORED.md), and the release zip ships it as the
-    library's corresponding source (provisional: 12 MB in every zip; a separate release asset would also satisfy
-    LGPL-2.1 section 6). A small C API in `h264_bridge.c` (`sc_h264_open/decode/convert/close`, optional exports, the
-    interface version stays 2): an older DLL means no software path, nothing else.
+    `native/fetch.sh` after its signature was checked (native/VENDORED.md). The release zip doesn't ship the 12 MB
+    tarball (the human, 2026-10-31: the project will be open source): `LICENSE.txt` names the release, its URL and
+    SHA-256 (read from `fetch.sh`), the configure arguments (read from `build.sh`) and the patches applied, which are
+    none: no FFmpeg file is modified, and `h264_bridge.c` is our own MIT file. The first version shipped the tarball
+    in `source\native\downloads`; dropping it took the x64 zip without the launcher from 15.4 MB to 3.9 MB. The spec's
+    licensing row changed to match (the human, 2026-10-31, agentdesk D-8ac44a6c8129, quoted under Answers); linking
+    FFmpeg as a separate DLL stays a possible later change. A small C API in `h264_bridge.c`
+    (`sc_h264_open/decode/convert/close`, optional exports, the interface version stays 2): an older DLL means no software path, nothing else.
   - **Routing, per stream:** a stream starts with the factory's decoder for its codec (hardware first, as before). Its
     first frame's SPS (`VideoBitstream`) decides: the router (`VideoDecoderRouter`) can decode the format when the
     hardware decoder takes it (8-bit 4:2:0 Baseline, Main, High) or the software one does (8-bit H.264 of the profiles
@@ -233,8 +240,14 @@
     appearing mid-stream) or a libavcodec failure fail the stream. No managed allocation per frame.
   - **Setting `softwareVideo`** (global, settings.json, on by default per the human's preference): off spends
     bandwidth (MJPEG) instead of CPU. New streams follow at once; advertising follows from the next connection.
+    The viewer starts connecting before it reads settings.json, so the router it builds waits for the saved value
+    (`VideoDecoderRouter(..., awaitSoftwareSetting: true)`, released by `ApplySoftwareSetting` when the window applies
+    its settings, tens of milliseconds later) before it answers `Codecs`: a saved "off" can't lose the race with the
+    first connection's advertising (review AF-R2). The transport starts at once; only the display channel's
+    capability list waits, within the session's existing 5 s probe bound.
   - **UI:** the "Video codec" menu labels each codec with its path ("H.264 (hardware; 4:4:4 in software)", "(software)",
-    "(hardware)") and adds "Decode H.264 4:4:4 in software", grayed without the exports. About lists each codec's path
+    "(hardware)") and adds "Decode H.264 in software when the graphics card can't" (it covers 4:4:4, and all H.264
+    on a PC without a hardware decoder), grayed without the exports. About lists each codec's path
     and the last stream's format and path (`SpiceSession.VideoDecoding`).
   - **Native build:** FFmpeg's own configure and make run inside `native/build.sh` (the only downloaded scripts run);
     x86 assembly with NASM, AArch64 NEON with clang, the flags of decision 0026 and 0027 (full LTO, sections, CFG,
@@ -258,5 +271,11 @@
   and decoded in software whenever `spicecodec.dll` has the FFmpeg decoder.
 - The FFmpeg tarball: "這個專案最終會開源，所以我認為沒關係。有 ffmpeg 版本與 patch (如果我們有改 source 的話) 就好".
   The project will be open source, so the zip doesn't need the 12 MB tarball; it names the FFmpeg version, where the
-  pinned tarball comes from (with its hash), and any patch we apply.
+  pinned tarball comes from (with its hash), and any patch we apply. Done: see "Software decoder" above.
+- The matching spec change (the licensing table's FFmpeg row in `docs/design/spec.md`: notices name the pinned
+  tarball's version, URL and SHA-256, the configure arguments and any patches, instead of shipping the tarball).
+  Decided by: the human (2026-10-31, agentdesk D-8ac44a6c8129): "不管怎麼說vendor整包原始碼在dist tarball聽起來就很智障，
+  這個專案會開源所以沒關係，未來有必要再改成單獨link ffmpeg DLL" (shipping the whole vendored source in the dist
+  tarball is silly; the project will be open source, so it's fine; if needed later, change to linking a separate
+  FFmpeg DLL). A separately linked FFmpeg DLL is therefore a possible later change, not planned now.
 - `pacman -S make` in the local MSYS2: approved and installed (GNU Make 4.4.1).

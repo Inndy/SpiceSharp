@@ -43,6 +43,7 @@
     `0:LEN:`. That framing is the only protocol processing; the input escape below is the only interpretation of
     input. The bridge adds its own bytes in three places: status lines (`[PveTerm] Connecting...`, the `~?` help and
     `Connection closed: <reason>`), the console title it sets, and the reset sequence on exit (open question 2).
+    Toward the guest it adds bytes only when the user asks: the `stty` line of `~r` or `--auto-stty` (below).
     - Split UTF-8 needs no buffering on the targets. A sequence split across two `WriteFile` calls renders whole on
       Windows 11 build 26100.9711 (in-box conhost 10.0.26100.9549, the host behind a pseudoconsole). The test
       `Utf8SplitAcrossWritesRendersWhole` echoes every byte in its own frame. Windows Terminal brings its own
@@ -66,15 +67,16 @@
     since raw mode sends Ctrl+C to the guest.
     - The escape character (default `~`) is special only at the start of a line: first in the session, or right after
       Enter (`\r`, or `\n`). There it is held until the next key: `.` quits the bridge (the console is restored and
-      the WebSocket closed; the guest's shell keeps running), `?` prints a help line locally, the escape character
-      sends one of itself, and any other key sends the held escape character and then that key, in order. After `~?`
-      the line start remains, as in ssh, so `~?~.` quits; after anything else the next line start is the next Enter.
+      the WebSocket closed; the guest's shell keeps running), `?` prints a help line locally, `r` types the window
+      size into a serial console (amended 2026-10-31, below), the escape character sends one of itself, and any
+      other key sends the held escape character and then that key, in order. After `~?` and `~r` the line start
+      remains, as in ssh, so `~?~.` quits; after anything else the next line start is the next Enter.
     - There is no timeout and no timer: a held `~` waits for the next key.
     - A paste without bracketed paste is just typing to the bridge, so a pasted `"\r~."` quits, as in ssh. Text between
       `ESC[200~` and `ESC[201~` (bracketed paste, which the terminal sends once the guest asked for it) is never
       taken as an escape; after such a paste the escape works again from the next Enter.
-    - `--escape none` turns it off; `--escape C` picks another visible character. `.` and `?` are refused with a
-      usage error, because doubling them would collide with the quit and help commands; the filter itself also
+    - `--escape none` turns it off; `--escape C` picks another visible character. `.`, `?` and `r` are refused with
+      a usage error, because doubling them would collide with the quit, help and stty commands; the filter itself also
       checks doubling first, so a doubled escape character always sends one of itself. The startup line says
       `(~. to quit, ~? for help)` with the chosen character.
     - Output is never inspected. The filter is a per-character state machine with no allocation on the input path.
@@ -128,10 +130,25 @@
       pending on a reused per-thread event with a cached continuation (no `AsTask`), also 0 B; the input escape filter
       is 0 B too.
   - **Resize on serial consoles.** termproxy sets the size of the host-side pty that `qm terminal` runs in. A serial
-    line has no way to carry window size to the guest, so the guest's `stty size` stays as it was (live check). Users
-    run `stty rows R cols C` or xterm's `resize` in the guest. A node shell and a container console run in
-    termproxy's pty, so for them the resize reaches the program (from the source; not checked live, see open
-    question 6).
+    line has no way to carry window size to the guest, so the guest's `stty size` stays as it was (live check). A
+    node shell and a container console run in termproxy's pty, so for them the resize reaches the program (from the
+    source; not checked live, see open question 6).
+    Amended 2026-10-31 (the human, agentdesk D-6e78ed251399): the bridge can type the size for the user.
+    - **`~r`** (an escape, so only at the start of a line) sends `stty rows R cols C` and `\r` with the console
+      window's current size, as typed input. It is for the shell prompt of a logged-in guest; typed elsewhere (a
+      login prompt, an editor) it is just text there, which is why it is never automatic by default.
+    - **`--auto-stty`** (opt-in, off by default) sends the same line after every resize. A burst of size events read
+      in one batch sends one line, and the same size is never sent twice in a row. The line ends with Enter, so the
+      escape filter is told a new line started (`EscapeFilter.LineSent`): `~r` and `~.` work right after it, an
+      escape character already held stays held, and bracketed-paste tracking is unchanged (review AF-R1). Nothing is sent at connect, since
+      the guest is often at a login prompt then: type `~r` once logged in. The launcher doesn't pass the flag.
+    - Both apply only when the target is `qemu` (a VM's termproxy is always a serial port). For a node shell or a
+      container `--auto-stty` is ignored, and `~r` sends nothing and prints a status line saying the console already
+      follows the window size.
+    - The line is formatted into a fixed buffer (`Utf8.TryWrite`), so neither path allocates. Everything else stays
+      byte-transparent: termproxy's resize message is sent as before, and the guest's output is never read.
+    - Tests: `SttyEscapeTests` (the filter; end to end under a pseudoconsole against the fake termproxy for `qemu`,
+      `lxc` and node targets, with and without `--auto-stty`).
   - **Ships:** not in the v0 zip yet, because there is no launcher. The dev helper (`tools/pve-vv.py --term`) plays
     the launcher's part. Usage is in [../../src/PveTerm/README.md](../../src/PveTerm/README.md).
     Amended 2026-10-31: the v1 launcher ([0038](0038-v1-pve-launcher-winui3-unpackaged-self-contained-aot.md)) now
@@ -151,7 +168,8 @@
     that the descriptor carries the API credential, which the WebSocket upgrade needs in any case.
   - Costs:
     - Fidelity depends on the user's console host, which this project can't pin.
-    - Resize can't reach a guest through a serial line.
+    - Resize can't reach a guest through a serial line by itself; `~r` and `--auto-stty` type it, at the user's
+      request.
 
 - **Open questions (human):**
   1. Ship `PveTerm.exe` in the v0 zip now, with only the dev helper as a launcher, or with the v1 launcher?
@@ -185,6 +203,7 @@
   CA keeps the host check; a pinned leaf certificate is matched exactly and skips it (0033's amendment).
 - Serial terminal size (agentdesk D-6e78ed251399): both a `~r` escape that sends `stty rows R cols C` to the guest on
   demand, and an opt-in `--auto-stty` that sends it on every resize. Off by default, so the bridge stays transparent.
+  Done: see "Resize on serial consoles" above.
 - The launcher gets no `--auto-stty` setting (the human, 2026-10-31, agentdesk: "萬一要登入那自動模式也不實用":
   at a login prompt the automatic mode would type into it). `~r` covers the launcher; `--auto-stty` stays a
   command-line option.

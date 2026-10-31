@@ -17,6 +17,6 @@ fetch opus-1.5.2 65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce
 fetch lz4-1.10.0 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz
 # Release 9.0.2 from ffmpeg.org; the tarball's .asc signature was checked with gpg against the FFmpeg release signing key
 # (FCF9 86EA 15E6 E293 A564 4F10 B432 2F04 D676 58D8) before this hash was pinned. Only libavcodec's H.264 decoder and
-# the libavutil it needs are built (LGPL-2.1-or-later), statically into spicecodec.dll. tools/package.ps1 ships this
-# tarball in the release zip as the library's corresponding source.
+# the libavutil it needs are built (LGPL-2.1-or-later), statically into spicecodec.dll. The release zip doesn't ship the
+# tarball: tools/package.ps1 reads this line and names the release, URL and hash in LICENSE.txt (decision 0037).
 fetch ffmpeg-9.0.2 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz

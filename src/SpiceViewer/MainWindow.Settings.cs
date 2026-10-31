@@ -46,8 +46,8 @@ sealed unsafe partial class MainWindow
         _videoCodec = s.VideoCodec;
         _softwareVideo = s.SoftwareVideo;
         _statusOverlay = s.StatusOverlay;
-        // Read by the session when it advertises its codecs, after the hardware probe (over 100 ms from start).
-        if (Program.Video is { } video) video.SoftwareEnabled = _softwareVideo;
+        // The session's codec advertising waits for this (review AF-R2), so a saved "off" is always honoured.
+        if (Program.Video is { } video) video.ApplySoftwareSetting(_softwareVideo);
         if (_session is { } session)
         {
             session.VideoPacing = SessionPacing(_videoPacing);

@@ -1,14 +1,15 @@
 namespace PveTerm;
 
 /// <summary>What a typed character asks the bridge to do besides sending bytes.</summary>
-enum EscapeCommand { None, Quit, Help }
+enum EscapeCommand { None, Quit, Help, Stty }
 
 /// <summary>
 /// The ssh-style escape on the input side, the bridge's only interpretation of input (docs/decisions/0036; the
 /// human's decision of 2026-10-30). Following ssh: only the escape character (default <c>~</c>) typed at the start
 /// of a line, that is first in the session or right after Enter (<c>\r</c> or <c>\n</c>), is held until the next
-/// key. Then <c>.</c> quits the bridge, <c>?</c> shows help, the escape character sends itself once, and anything
-/// else sends the held escape character followed by that key. There is no timeout. Like ssh, a paste is just typing:
+/// key. Then <c>.</c> quits the bridge, <c>?</c> shows help, <c>r</c> asks for the window size as an <c>stty</c>
+/// line (VM serial consoles, decision 0036), the escape character sends itself once, and anything else sends the held
+/// escape character followed by that key. There is no timeout. Like ssh, a paste is just typing:
 /// pasted <c>"\r~."</c> quits. Text inside a bracketed paste (<c>ESC[200~</c> ... <c>ESC[201~</c>, which the terminal
 /// sends when the guest asked for it) is never taken as an escape. Output is never looked at.
 /// </summary>
@@ -20,8 +21,9 @@ sealed class EscapeFilter
     int _marker; // characters of "\e[20" matched so far, 5 after '0'/'1' (then _markerEnds says which)
     bool _markerEnds;
 
-    /// <summary>Characters that can't be the escape character: they are its commands (<c>.</c> quit, <c>?</c> help).</summary>
-    public static bool IsCommand(char c) => c is '.' or '?';
+    /// <summary>Characters that can't be the escape character: they are its commands (<c>.</c> quit, <c>?</c> help,
+    /// <c>r</c> stty with the window size).</summary>
+    public static bool IsCommand(char c) => c is '.' or '?' or 'r';
 
     /// <param name="escape">The escape character, or null to turn the escape off.</param>
     public EscapeFilter(char? escape)
@@ -53,6 +55,7 @@ sealed class EscapeFilter
             {
                 if (c == '.') return EscapeCommand.Quit;
                 if (c == '?') return EscapeCommand.Help; // still at line start, as in ssh: "~?" then "~." quits
+                if (c == 'r') return EscapeCommand.Stty; // its line ends with \r: still at line start
                 send[count++] = _escape;
             }
         }
@@ -64,6 +67,17 @@ sealed class EscapeFilter
         _atLineStart = c is '\r' or '\n';
         send[count++] = c;
         return EscapeCommand.None;
+    }
+
+    /// <summary>
+    /// The bridge itself sent a line ending in Enter (the <c>--auto-stty</c> line, decision 0036): the guest is at a
+    /// new line, so the next escape character counts as at the start of one (review AF-R1). An escape character held
+    /// before stays held and the next key decides it, as at any line start. Bracketed-paste tracking is untouched:
+    /// inside a paste no escape is taken anyway. Nothing to do when the escape is off.
+    /// </summary>
+    public void LineSent()
+    {
+        if (_enabled) _atLineStart = true;
     }
 
     /// <summary>Follows the bracketed-paste markers ESC[200~ (start) and ESC[201~ (end) through the input.</summary>
@@ -93,7 +107,8 @@ sealed class EscapeFilter
 
     /// <summary>The help line for <c>~?</c>, made once.</summary>
     public string HelpText => _help ??= $"Escapes, typed at the start of a line: {_escape}. quit PveTerm (the guest " +
-        $"session keeps running), {_escape}{_escape} send {_escape}, {_escape}? this help.";
+        $"session keeps running), {_escape}r type \"stty rows R cols C\" and Enter with this window's size (VM serial " +
+        $"consoles), {_escape}{_escape} send {_escape}, {_escape}? this help.";
 
     /// <summary>The hint for the startup line, or null when the escape is off.</summary>
     public string? Hint => _enabled ? $"{_escape}. to quit, {_escape}? for help" : null;

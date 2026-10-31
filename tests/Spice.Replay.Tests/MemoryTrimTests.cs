@@ -84,7 +84,7 @@ public sealed partial class StreamPacingTests
         Assert.Contains(log, l => l.StartsWith("memory: trimmed (video ended)", StringComparison.Ordinal));
         Assert.Equal(0, PixelBuffers.PooledBytes);
 
-        // A second video right after: its end is within the interval, so no second collection.
+        // A second video right after: its end is within the interval, so no second trim.
         h.Send(DisplayMsg.StreamCreate, Create());
         h.Frame(Epoch + 40);
         log = CaptureLog(() => h.Send(DisplayMsg.StreamDestroy, Bytes(w => w.Write(7u))));
@@ -105,5 +105,20 @@ public sealed partial class StreamPacingTests
         Assert.DoesNotContain(log, l => l.StartsWith("memory: trimmed", StringComparison.Ordinal));
         log = CaptureLog(() => h.Send(DisplayMsg.StreamDestroyAll, []));
         Assert.Contains(log, l => l.StartsWith("memory: trimmed (video ended)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ATrimDoesNotForceACollection()
+    {
+        // 0041, the human (2026-10-31): keep the trim, no forced GC.Collect. A forced full collection would bump the
+        // gen-2 count; the trim itself allocates only its log line, far below any gen-2 budget.
+        await using var h = new Harness();
+        PixelBuffers.Return(PixelBuffers.Rent(1 << 20));
+        int gen2 = GC.CollectionCount(2);
+        var log = CaptureLog(() => Assert.True(h.Session.TrimMemory("test", force: true)));
+        Assert.Equal(gen2, GC.CollectionCount(2));
+        Assert.Equal(0, PixelBuffers.PooledBytes);
+        Assert.Contains(log, l => l.StartsWith("memory: trimmed (test)", StringComparison.Ordinal)
+            && l.Contains("released to the GC", StringComparison.Ordinal));
     }
 }

@@ -153,8 +153,8 @@
                           DropDownOpened="OnVncChoiceOpened" MinWidth="180">
                     <ComboBoxItem x:Name="AutoVncItem" Content="Automatic" />
                     <ComboBoxItem x:Name="TigerVncItem" Content="TigerVNC" />
-                    <ComboBoxItem x:Name="TightVncItem" Content="TightVNC" />
                     <ComboBoxItem x:Name="UltraVncItem" Content="UltraVNC" />
+                    <ComboBoxItem x:Name="TightVncItem" Content="TightVNC" />
                     <ComboBoxItem x:Name="RealVncItem" Content="RealVNC Viewer" />
                     <ComboBoxItem Content="None (connect one yourself)" />
                     <ComboBoxItem x:Name="CustomVncItem" Content="Custom command (launcher.json)" />

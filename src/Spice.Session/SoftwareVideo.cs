@@ -107,12 +107,35 @@ sealed class SoftwareH264VideoDecoder(H264Decoder decoder) : IVideoDecoder
 /// The session's video decoders (docs/decisions/0037, amended 2026-10-31): hardware first, software for what the
 /// hardware refuses. A codec is advertised when either path decodes it; each stream's declared format picks the path.
 /// </summary>
-public sealed class VideoDecoderRouter(IVideoDecoderFactory? hardware, IVideoDecoderFactory? software) : IVideoDecoderFactory
+public sealed class VideoDecoderRouter : IVideoDecoderFactory
 {
     volatile bool _softwareEnabled = true;
+    /// <summary>Completed once the saved softwareVideo setting is applied; null when no setting is awaited.</summary>
+    readonly TaskCompletionSource? _settingApplied;
 
-    public IVideoDecoderFactory? Hardware { get; } = hardware;
-    public IVideoDecoderFactory? Software { get; } = software;
+    /// <param name="awaitSoftwareSetting">
+    /// <see cref="Codecs"/> (what a session advertises) waits for <see cref="ApplySoftwareSetting"/> as well as for the
+    /// hardware probe, so a saved "off" read after the connection started can't lose the race with advertising
+    /// (review AF-R2). The session's probe timeout still bounds the wait; without an answer it advertises MJPEG only.
+    /// </param>
+    public VideoDecoderRouter(IVideoDecoderFactory? hardware, IVideoDecoderFactory? software, bool awaitSoftwareSetting = false)
+    {
+        Hardware = hardware;
+        Software = software;
+        if (awaitSoftwareSetting) _settingApplied = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    public IVideoDecoderFactory? Hardware { get; }
+    public IVideoDecoderFactory? Software { get; }
+
+    /// <summary>The saved setting is known: sets <see cref="SoftwareEnabled"/> and releases <see cref="Codecs"/>. Any thread.</summary>
+    public void ApplySoftwareSetting(bool enabled)
+    {
+        SoftwareEnabled = enabled;
+        _settingApplied?.TrySetResult();
+    }
+
+    bool SettingPending => _settingApplied is { Task.IsCompleted: false };
 
     /// <summary>
     /// Software decoding is allowed (the softwareVideo setting, on by default). Read when a session advertises its codecs
@@ -121,11 +144,13 @@ public sealed class VideoDecoderRouter(IVideoDecoderFactory? hardware, IVideoDec
     /// </summary>
     public bool SoftwareEnabled { get => _softwareEnabled; set => _softwareEnabled = value; }
 
-    /// <summary>The union of both paths' codecs, software's only while enabled. A failed hardware probe leaves software's.</summary>
+    /// <summary>The union of both paths' codecs, software's only while enabled. A failed hardware probe leaves software's.
+    /// With a setting awaited, it answers only once <see cref="ApplySoftwareSetting"/> has run.</summary>
     public Task<IReadOnlyList<VideoCodecType>> Codecs => Combine();
 
     async Task<IReadOnlyList<VideoCodecType>> Combine()
     {
+        if (_settingApplied is { } setting) await setting.Task.ConfigureAwait(false);
         IReadOnlyList<VideoCodecType> hw = [];
         if (Hardware is { } h)
         {
@@ -135,8 +160,10 @@ public sealed class VideoDecoderRouter(IVideoDecoderFactory? hardware, IVideoDec
         return Union(hw);
     }
 
-    /// <summary>The codecs either path decodes now, or null until the hardware probe has answered (for menus).</summary>
+    /// <summary>The codecs either path decodes now, or null until the hardware probe has answered and an awaited
+    /// setting is applied (for menus).</summary>
     public IReadOnlyList<VideoCodecType>? KnownCodecs =>
+        SettingPending ? null :
         Hardware is null ? Union([]) :
         Hardware.Codecs.IsCompletedSuccessfully ? Union(Hardware.Codecs.Result) :
         Hardware.Codecs.IsCompleted ? Union([]) : null;
