@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-31-windows-terminal.md](2026-10-31-windows-terminal.md) | Decision 0042 Windows Terminal detection, PATH alias identity, reparse validation, settings/Auto hand-offs, Python CLI/command construction, and offline regressions |
 | [2026-10-31-launcher-smoke-fixes.md](2026-10-31-launcher-smoke-fixes.md) | Launcher B1-B6 fixes: sign-in cleanup, per-sign-in version cache, exception redaction/recovery, AOT patterns, energy, and loopback regressions |
 | [2026-10-31-l13-l15.md](2026-10-31-l13-l15.md) | L13-L15 status/detail layout, shared append-only log, truncation, I/O errors, handle lifetime, and window-free regressions |
 | [2026-10-31-idle-memory.md](2026-10-31-idle-memory.md) | K1 idle-memory trimming, decision 0041, native ownership and optional export, bounded pixel pool, trim concurrency, and window-free regressions |

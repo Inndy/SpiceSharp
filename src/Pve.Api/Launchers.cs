@@ -61,15 +61,49 @@ public static class ViewerLauncher
     }
 }
 
-/// <summary>Where the terminal bridge runs (docs/decisions/0036, 0038).</summary>
+/// <summary>Where the terminal bridge runs (docs/decisions/0036, 0038, 0042).</summary>
 public enum TerminalHost
 {
     /// <summary>A new console: Windows 11 opens it in the default terminal application, Windows 10 in conhost.</summary>
     Default,
-    /// <summary>A new tab in the most recent Windows Terminal window (<c>wt.exe -w 0 new-tab</c>).</summary>
+    /// <summary>A new tab in the most recent Windows Terminal window (<c>wt.exe -w 0 new-tab</c>): the stable package,
+    /// or without it another wt.exe that isn't Preview (<see cref="WindowsTerminalScan.For"/>).</summary>
     WindowsTerminal,
     /// <summary>The classic console host, whatever the default terminal is (<c>conhost.exe</c>).</summary>
     Conhost,
+    /// <summary>The Windows Terminal that <see cref="WindowsTerminalScan.Preferred"/> picks at launch, otherwise
+    /// <see cref="Default"/>.</summary>
+    Auto,
+    /// <summary>A new tab in Windows Terminal Preview.</summary>
+    WindowsTerminalPreview,
+}
+
+/// <summary>A terminal choice resolved for one launch (<see cref="TerminalLauncher.Resolve(TerminalHost)"/>).
+/// <see cref="Host"/> is the kind of host: <see cref="TerminalHost.Default"/>, <see cref="TerminalHost.Conhost"/>, or
+/// <see cref="TerminalHost.WindowsTerminal"/> for a tab in any flavour, and then <see cref="WindowsTerminal"/> says
+/// which.</summary>
+public sealed record TerminalTarget
+{
+    public TerminalHost Host { get; }
+    public WindowsTerminalInstall? WindowsTerminal { get; }
+
+    TerminalTarget(TerminalHost host, WindowsTerminalInstall? wt) => (Host, WindowsTerminal) = (host, wt);
+
+    /// <summary>A new tab in this Windows Terminal.</summary>
+    public static TerminalTarget In(WindowsTerminalInstall wt) => new(TerminalHost.WindowsTerminal, wt);
+
+    /// <summary><see cref="TerminalHost.Default"/> or <see cref="TerminalHost.Conhost"/>.</summary>
+    public static TerminalTarget Console(TerminalHost host) => host is TerminalHost.Default or TerminalHost.Conhost
+        ? new(host, null)
+        : throw new ArgumentOutOfRangeException(nameof(host), host, "only Default and Conhost need no Windows Terminal");
+
+    /// <summary>For the log.</summary>
+    public override string ToString() => Host switch
+    {
+        TerminalHost.WindowsTerminal => $"{WindowsTerminal!.DisplayName} ({WindowsTerminal.Path})",
+        TerminalHost.Conhost => "conhost",
+        _ => "a new console",
+    };
 }
 
 /// <summary>
@@ -85,14 +119,45 @@ public static class TerminalLauncher
     /// <summary>
     /// Starts the bridge and completes when it has collected the descriptor. The returned task then completes with
     /// the bridge's exit code when the session ends, or with null when the terminal (Windows Terminal) hides the
-    /// process from us.
+    /// process from us. Windows Terminal is looked for now.
     /// </summary>
-    public static async Task<Task<int?>> LaunchAsync(TermDescriptor d, string bridgeExe, TerminalHost host, CancellationToken ct = default)
+    public static async Task<Task<int?>> LaunchAsync(TermDescriptor d, string bridgeExe, TerminalHost host, CancellationToken ct = default) =>
+        await LaunchAsync(d, bridgeExe, Resolve(host), ct).ConfigureAwait(false);
+
+    /// <summary>As above, in a terminal already resolved. The hand-off and exit-code rules follow the resolved host,
+    /// so <see cref="TerminalHost.Auto"/> behaves exactly like the host it became.</summary>
+    public static async Task<Task<int?>> LaunchAsync(TermDescriptor d, string bridgeExe, TerminalTarget target, CancellationToken ct = default)
     {
         if (!File.Exists(bridgeExe)) throw new PveApiException($"{Path.GetFileName(bridgeExe)} was not found in the launcher's folder.");
-        return await LaunchCoreAsync(d, (pipe, nonce) => CreateStartInfo(host, bridgeExe, pipe, nonce, d.DisplayName),
-            exitMeansAbandoned: host != TerminalHost.WindowsTerminal, exitCodeIsBridge: host == TerminalHost.Default, ct).ConfigureAwait(false);
+        return await LaunchCoreAsync(d, (pipe, nonce) => CreateStartInfo(target, bridgeExe, pipe, nonce, d.DisplayName),
+            exitMeansAbandoned: ExitMeansAbandoned(target.Host), exitCodeIsBridge: ExitCodeIsBridge(target.Host), ct).ConfigureAwait(false);
     }
+
+    /// <summary>wt.exe hands the command to a running terminal and exits at once; the other hosts are the bridge or
+    /// its console host.</summary>
+    internal static bool ExitMeansAbandoned(TerminalHost resolved) => resolved != TerminalHost.WindowsTerminal;
+
+    /// <summary>Only a bridge started directly is the process we hold.</summary>
+    internal static bool ExitCodeIsBridge(TerminalHost resolved) => resolved == TerminalHost.Default;
+
+    /// <summary>Resolves a choice, looking for Windows Terminal only when the choice needs it.</summary>
+    public static TerminalTarget Resolve(TerminalHost choice) =>
+        Resolve(choice, choice is TerminalHost.Default or TerminalHost.Conhost ? WindowsTerminalScan.Nothing : WindowsTerminalLocator.Scan());
+
+    /// <summary>
+    /// <see cref="TerminalHost.Auto"/> becomes the Windows Terminal the scan prefers, or <see cref="TerminalHost.Default"/>.
+    /// An explicit Windows Terminal choice that wasn't found is an error, so the user sees why nothing opened.
+    /// </summary>
+    public static TerminalTarget Resolve(TerminalHost choice, WindowsTerminalScan scan) => choice switch
+    {
+        TerminalHost.Auto => scan.Preferred is { } wt ? TerminalTarget.In(wt) : TerminalTarget.Console(TerminalHost.Default),
+        TerminalHost.WindowsTerminal => TerminalTarget.In(scan.For(choice) ?? throw new PveApiException(
+            "Windows Terminal was not found (neither its app execution alias nor a wt.exe on PATH). Install it, or choose another terminal.")),
+        TerminalHost.WindowsTerminalPreview => TerminalTarget.In(scan.For(choice) ?? throw new PveApiException(
+            "Windows Terminal Preview was not found (its app execution alias is missing or turned off). Install it, or choose another terminal.")),
+        TerminalHost.Conhost => TerminalTarget.Console(TerminalHost.Conhost),
+        _ => TerminalTarget.Console(TerminalHost.Default),
+    };
 
     /// <param name="exitMeansAbandoned">The started process is the bridge (or its console host), so its exit ends
     /// the hand-off; wt.exe hands the command to a running terminal and exits at once.</param>
@@ -150,17 +215,20 @@ public static class TerminalLauncher
 
     /// <summary>The command line for each host. Only the pipe name and nonce are on it; they grant nothing without
     /// this user's access to the pipe.</summary>
-    internal static ProcessStartInfo CreateStartInfo(TerminalHost host, string bridgeExe, string pipe, string nonce, string title)
+    internal static ProcessStartInfo CreateStartInfo(TerminalTarget target, string bridgeExe, string pipe, string nonce, string title)
     {
         // ShellExecute gives a console program its own new console and passes no standard handles.
         var psi = new ProcessStartInfo { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(bridgeExe) ?? "" };
-        switch (host)
+        switch (target.Host)
         {
             case TerminalHost.WindowsTerminal:
-                psi.FileName = "wt.exe";
+                // The path found, so the tab opens in that Windows Terminal (stable, Preview or a portable copy).
+                psi.FileName = target.WindowsTerminal!.Path;
                 // Windows Terminal splits its arguments at ';'; the title must not end the command early.
                 string safe = new(title.Where(c => !char.IsControl(c) && c is not (';' or '"')).Take(80).ToArray());
-                foreach (var a in new[] { "-w", "0", "new-tab", "--title", safe.Length > 0 ? safe : "PveTerm", "--", bridgeExe })
+                // The bridge's path can't lose a ';' (it would name another file), so it is escaped as "\;", which
+                // Windows Terminal reads as a literal ';' (review R3). Argv quoting alone doesn't stop the split.
+                foreach (var a in new[] { "-w", "0", "new-tab", "--title", safe.Length > 0 ? safe : "PveTerm", "--", EscapeWtSeparators(bridgeExe) })
                     psi.ArgumentList.Add(a);
                 break;
             case TerminalHost.Conhost:
@@ -174,4 +242,7 @@ public static class TerminalLauncher
         foreach (var a in new[] { "console", "--pipe", pipe, "--nonce", nonce }) psi.ArgumentList.Add(a);
         return psi;
     }
+
+    /// <summary>Windows Terminal's command-line grammar splits at an unescaped ';'; <c>\;</c> is a literal one.</summary>
+    internal static string EscapeWtSeparators(string arg) => arg.Replace(";", @"\;", StringComparison.Ordinal);
 }

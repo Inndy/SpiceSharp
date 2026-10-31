@@ -141,9 +141,14 @@
                 <Button x:Name="TerminalButton" Grid.Column="1" Content="Open terminal" Click="OnOpenTerminal" IsEnabled="False"
                         ToolTipService.ToolTip="VM: serial console. Container: console. Opens in your terminal through PveTerm." />
                 <TextBlock Grid.Column="3" Text="Terminal:" VerticalAlignment="Center" />
-                <ComboBox x:Name="TerminalChoice" Grid.Column="4" SelectionChanged="OnTerminalChoiceChanged" MinWidth="200">
-                    <ComboBoxItem Content="Default terminal app" />
-                    <ComboBoxItem Content="Windows Terminal tab" />
+                <!-- Items in the order of MainWindow.TerminalChoices. The Windows Terminal items are labelled from the
+                     detection and shown only when found (or chosen). -->
+                <ComboBox x:Name="TerminalChoice" Grid.Column="4" SelectionChanged="OnTerminalChoiceChanged"
+                          DropDownOpened="OnTerminalChoiceOpened" DropDownClosed="OnTerminalChoiceClosed" MinWidth="200">
+                    <ComboBoxItem x:Name="AutoTerminalItem" Content="Automatic" />
+                    <ComboBoxItem x:Name="WtTerminalItem" Content="Windows Terminal" />
+                    <ComboBoxItem x:Name="WtPreviewTerminalItem" Content="Windows Terminal Preview" />
+                    <ComboBoxItem Content="Default terminal app (new console)" />
                     <ComboBoxItem Content="Console host (conhost)" />
                 </ComboBox>
             </Grid>

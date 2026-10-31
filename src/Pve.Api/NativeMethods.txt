@@ -7,3 +7,9 @@ CredFree
 CREDENTIALW
 CRED_TYPE
 CRED_PERSIST
+
+// App Execution Alias targets (WindowsTerminal.cs)
+CreateFile
+DeviceIoControl
+FSCTL_GET_REPARSE_POINT
+IO_REPARSE_TAG_APPEXECLINK

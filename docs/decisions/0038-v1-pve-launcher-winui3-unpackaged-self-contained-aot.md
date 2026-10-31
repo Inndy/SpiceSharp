@@ -80,7 +80,9 @@
       It is UTF-8 JSON, version 1, written with a source-generated context. It holds:
       - `servers`: each with `id`, `name`, `url`, `auth` (`token` or `password`), `user` and `realm`, or `tokenId`,
         and an optional `ca` (PEM);
-      - `terminal`: `default`, `wt` or `conhost`;
+      - `terminal`: `default`, `wt` or `conhost` (amended 2026-10-31 by
+        [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md): also `auto`, the default for a
+        missing or unknown value, and `wt-preview`);
       - `lastServer`.
     - No secret is in it. It is read once at startup and written (temp file, then an atomic move) only when the user
       changes something. Comments and trailing commas are accepted; unknown values fall back. A file that can't be
@@ -113,6 +115,11 @@
       - `default`: PveTerm started directly in a new console. Windows 11 opens it in the default terminal app.
       - `wt`: a new tab in the most recent Windows Terminal window (`wt.exe -w 0 new-tab --title ... --`).
       - `conhost`: `conhost.exe PveTerm.exe ...`.
+
+      Amended 2026-10-31 (human: "launcher/termproxy 主動偵測環境是否有安裝 Windows Terminal 或 Windows Terminal
+      Preview 或 wt.exe，主動使用"): the default is now `auto`, which detects Windows Terminal at each launch and
+      opens a tab in it, else a new console; `wt` and `wt-preview` start the detected wt.exe by its full path. See
+      [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md).
 
       The command line carries only the pipe name and nonce. With `default`, a non-zero PveTerm exit code is reported
       in the window, waited for on the process handle.

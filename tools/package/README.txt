@@ -123,9 +123,21 @@ from the folder above it.
                a file. A VM that is stopped or has no SPICE display shows the server's error.
   Terminal     "Open terminal" (or right-click) opens a VM's serial console, and a container's
                console, in your terminal through PveTerm.exe. Choose where at the bottom
-               right: the default terminal app, a Windows Terminal tab, or the classic
-               console window. In the terminal, type ~. at the start of a line to leave
-               (~? lists the escapes).
+               right:
+                 Automatic (the default): a new tab in Windows Terminal when it is
+                   installed, else a new console. With both Windows Terminal and Windows
+                   Terminal Preview, it takes the one set as Windows' default terminal
+                   app, else the one whose wt.exe alias is turned on (Settings > Apps >
+                   Advanced app settings > App execution aliases), else Windows Terminal.
+                   A wt.exe on PATH (a portable copy) counts too. The list shows which
+                   one it will open.
+                 Windows Terminal, Windows Terminal Preview: a tab in that one (listed
+                   when installed).
+                 Default terminal app: a new console, which Windows 11 opens in your
+                   default terminal app.
+                 Console host (conhost): the classic console window.
+               In the terminal, type ~. at the start of a line to leave (~? lists the
+               escapes).
   Refresh      F5 or the Refresh button. The list does not update by itself.
   Sign out     forgets the session in memory. "Forget saved..." deletes the remembered
                password or token secret of the selected server, or of all servers.

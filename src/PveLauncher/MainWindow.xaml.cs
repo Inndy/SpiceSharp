@@ -27,6 +27,10 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     IReadOnlyList<PveVm> _guests = [];
     bool _busy, _loading;
 
+    /// <summary>The terminal selector's items, in order (MainWindow.xaml).</summary>
+    static readonly TerminalHost[] TerminalChoices =
+        [TerminalHost.Auto, TerminalHost.WindowsTerminal, TerminalHost.WindowsTerminalPreview, TerminalHost.Default, TerminalHost.Conhost];
+
     public ObservableCollection<ServerItem> Servers { get; } = [];
     public ObservableCollection<GuestItem> Guests { get; } = [];
 
@@ -48,7 +52,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         if (_settings.LoadProblem is { } problem) LauncherLog.Write("settings: " + problem);
 
         _loading = true;
-        TerminalChoice.SelectedIndex = (int)_settings.Terminal;
+        ShowTerminalDetection(WindowsTerminalLocator.Scan());
+        TerminalChoice.SelectedIndex = Math.Max(0, Array.IndexOf(TerminalChoices, _settings.Terminal));
         foreach (var s in _settings.Servers) Servers.Add(new ServerItem(s));
         _loading = false;
         SizeToDpi(1120, 700);
@@ -467,9 +472,14 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         Task<int?>? exited = null;
         await RunAsync($"Could not open the terminal of {g.Label}", async c =>
         {
+            // Looks for Windows Terminal at each launch, before the descriptor is requested, so a chosen one that is
+            // missing costs no ticket renewal.
+            var scan = WindowsTerminalLocator.Scan();
+            ShowTerminalDetection(scan);
+            var target = TerminalLauncher.Resolve(host, scan);
             var d = await c.CreateTermDescriptorAsync(g.Vm);
-            exited = await TerminalLauncher.LaunchAsync(d, bridge, host);
-            LauncherLog.Write($"terminal: {g.Label} on {g.Vm.Node} via {host}");
+            exited = await TerminalLauncher.LaunchAsync(d, bridge, target);
+            LauncherLog.Write($"terminal: {g.Label} on {g.Vm.Node} via {host}: {target}");
             ShowInfo($"Opened the terminal of {g.Label}.");
         });
         if (exited is null) return;
@@ -482,8 +492,50 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     void OnTerminalChoiceChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_loading || TerminalChoice.SelectedIndex < 0) return;
-        _settings.Terminal = (TerminalHost)TerminalChoice.SelectedIndex;
+        _settings.Terminal = TerminalChoices[TerminalChoice.SelectedIndex];
         SaveSettings();
+    }
+
+    /// <summary>Detection runs when the list opens, never on a timer (energy rules): a few file checks and one
+    /// registry value.</summary>
+    void OnTerminalChoiceOpened(object sender, object e) => ShowTerminalDetection(WindowsTerminalLocator.Scan());
+
+    /// <summary>Labels "Automatic" with what it opens, and shows each Windows Terminal found (or the chosen one,
+    /// marked when missing).</summary>
+    void ShowTerminalDetection(WindowsTerminalScan scan)
+    {
+        var auto = scan.Preferred;
+        AutoTerminalItem.Content = auto is null ? "Automatic (new console)" : $"Automatic ({auto.DisplayName})";
+        ToolTipService.SetToolTip(AutoTerminalItem, auto is null
+            ? "Windows Terminal was not found; a new console opens."
+            : $"A new tab in {auto.Path} ({scan.PreferredReason}).");
+        Label(WtTerminalItem, TerminalHost.WindowsTerminal, "Windows Terminal");
+        Label(WtPreviewTerminalItem, TerminalHost.WindowsTerminalPreview, "Windows Terminal Preview");
+
+        // The closed box shows a copy of the selected item's text; selecting the item again refreshes it.
+        if (!TerminalChoice.IsDropDownOpen) RefreshTerminalChoiceBox();
+
+        void Label(ComboBoxItem item, TerminalHost choice, string name)
+        {
+            var wt = scan.For(choice);
+            item.Visibility = wt is not null || _settings.Terminal == choice ? Visibility.Visible : Visibility.Collapsed;
+            item.Content = wt is null ? $"{name} (not found)"
+                : wt.DisplayName.StartsWith(name, StringComparison.Ordinal) ? wt.DisplayName : $"{name} ({wt.DisplayName})";
+            ToolTipService.SetToolTip(item, wt is null ? $"{name} was not found." : $"A new tab in {wt.Path}.");
+        }
+    }
+
+    void OnTerminalChoiceClosed(object sender, object e) => RefreshTerminalChoiceBox();
+
+    void RefreshTerminalChoiceBox()
+    {
+        int index = TerminalChoice.SelectedIndex;
+        if (index < 0) return;
+        bool loading = _loading;
+        _loading = true;
+        TerminalChoice.SelectedIndex = -1;
+        TerminalChoice.SelectedIndex = index;
+        _loading = loading;
     }
 
     // ---- ISignInPrompt: Pve.Api's sign-in flow asks through these dialogs, on the UI thread ----------------------

@@ -137,6 +137,31 @@ public sealed class SettingsTests : IDisposable
         Assert.Equal("pve2.example", two.DisplayName);
     }
 
+    [Theory]
+    [InlineData("\"terminal\": \"auto\",", TerminalHost.Auto, "auto")]
+    [InlineData("\"terminal\": \"default\",", TerminalHost.Default, "default")] // chosen before "auto" existed: kept
+    [InlineData("\"terminal\": \"wt\",", TerminalHost.WindowsTerminal, "wt")]
+    [InlineData("\"terminal\": \"wt-preview\",", TerminalHost.WindowsTerminalPreview, "wt-preview")]
+    [InlineData("\"terminal\": \"conhost\",", TerminalHost.Conhost, "conhost")]
+    [InlineData("", TerminalHost.Auto, "auto")]
+    [InlineData("\"terminal\": null,", TerminalHost.Auto, "auto")]
+    [InlineData("\"terminal\": \"Default\",", TerminalHost.Auto, "auto")]
+    public void TheTerminalChoiceRoundTrips(string field, TerminalHost expected, string saved)
+    {
+        Directory.CreateDirectory(_dir);
+        string path = Path.Combine(_dir, LauncherSettings.FileName);
+        File.WriteAllText(path, $$"""{ "version": 1, {{field}} "servers": [] }""");
+        var s = LauncherSettings.Load(_dir);
+        Assert.Null(s.LoadProblem);
+        Assert.Equal(expected, s.Terminal);
+        s.Save(_dir);
+        Assert.Contains($"\"terminal\": \"{saved}\"", File.ReadAllText(path));
+        Assert.Equal(expected, LauncherSettings.Load(_dir).Terminal);
+    }
+
+    [Fact]
+    public void NoFileMeansAutomatic() => Assert.Equal(TerminalHost.Auto, LauncherSettings.Load(_dir).Terminal);
+
     [Fact]
     public void ABrokenFileIsSetAsideAtTheNextSave()
     {
@@ -163,7 +188,7 @@ public sealed class SettingsTests : IDisposable
             """);
         var s = LauncherSettings.Load(_dir);
         Assert.Null(s.LoadProblem);
-        Assert.Equal(TerminalHost.Default, s.Terminal);
+        Assert.Equal(TerminalHost.Auto, s.Terminal);
         var only = Assert.Single(s.Servers);
         Assert.Equal(PveAuthKind.Password, only.Auth);
         Assert.Equal("pam", only.Realm);

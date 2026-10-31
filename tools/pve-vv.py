@@ -5,7 +5,9 @@ Reads credentials from PVE_TOKEN_DONT_COMMIT.txt (PVE_URL, TOKEN_ID, TOKEN_SECRE
 the nearest parent directory that has it (a worktree checkout finds the main checkout's copy).
 Usage: pve-vv.py <vmid> [out.vv | --config]   or   pve-vv.py --list
        pve-vv.py --term-probe [vmid ...]      read-only: version, console privileges, serial ports, TLS chain
-       pve-vv.py --term <target> [options]    start PveTerm for a termproxy console (see term_main below)
+       pve-vv.py --term <target> [options]    start PveTerm for a termproxy console: a Windows Terminal tab when
+                                              one is found, else a new console (--wt PATH, --console, --here,
+                                              --hidden; see term_main below)
 Every API request verifies the server the way PveTerm does (docs/decisions/0033): against the CA in the PEM file
 that an optional PVE_CA_FILE line names (relative to the token file's folder), else against the system trust store,
 with the hostname checked in both cases. No request, and so no credential, goes to an unverified server.
@@ -96,20 +98,26 @@ if sys.argv[1] == "--term-probe":
     sys.exit(0)
 
 def term_main(argv):
-    """--term TARGET [--prefetch] [--hidden | --here] [--exe PATH] [-- COMMAND ...]
+    """--term TARGET [--prefetch] [--wt PATH | --console | --hidden | --here] [--exe PATH] [-- COMMAND ...]
 
     TARGET is qemu:VMID[:serialN], lxc:VMID or node:NAME. Hands PveTerm its connection descriptor through a
     named pipe that only this user (at this integrity level) can open, the same way a launcher does
     (docs/decisions/0036). The token stays inside this process and the pipe; nothing secret is printed, put on a
-    command line or written to disk. COMMAND defaults to PveTerm in a new console window; its arguments may use
-    {pipe}, {nonce} and {exe}. --hidden starts COMMAND without any window (for the pseudoconsole harness in
-    tests/Pve.Term.Tests, which shows nothing either). --prefetch requests the termproxy session here instead of
-    in PveTerm. The descriptor carries the PVE_CA_FILE CA when one is configured (PveTerm then pins it), else none
-    (system trust). The spiceproxy answer's CA is the cluster CA for SPICE, not necessarily the API's issuer.
+    command line or written to disk.
+    Where PveTerm runs, as the launcher's "Automatic" choice does (docs/decisions/0042, tools/wt_locate.py): a new
+    tab in Windows Terminal (`wt.exe -w 0 new-tab --title ... -- PveTerm console --pipe ... --nonce ...`), the one
+    set as the default terminal application, else the one behind the wt.exe alias, else stable, Preview or wt.exe on
+    PATH; without any, a new console window. --wt PATH uses that wt.exe. --console forces a new console window.
+    --here runs PveTerm in this console (e.g. a terminal multiplexer pane). --hidden starts COMMAND without any
+    window (for the pseudoconsole harness in tests/Pve.Term.Tests, which shows nothing either). COMMAND replaces
+    all of these; its arguments may use {pipe}, {nonce} and {exe}. --prefetch requests the termproxy session here
+    instead of in PveTerm. The descriptor carries the PVE_CA_FILE CA when one is configured (PveTerm then pins it),
+    else none (system trust). The spiceproxy answer's CA is the cluster CA for SPICE, not necessarily the API's
+    issuer.
     """
-    import ctypes, hmac, secrets, subprocess, threading
+    import ctypes, hmac, importlib.util, secrets, subprocess, threading
     from ctypes import wintypes as wt
-    opts = {"prefetch": False, "hidden": False, "here": False, "exe": None}
+    opts = {"prefetch": False, "hidden": False, "here": False, "console": False, "wt": None, "exe": None}
     command = None
     rest = list(argv)
     target = rest.pop(0)
@@ -118,11 +126,32 @@ def term_main(argv):
         if a == "--prefetch": opts["prefetch"] = True
         elif a == "--hidden": opts["hidden"] = True
         elif a == "--here": opts["here"] = True
+        elif a == "--console": opts["console"] = True
+        elif a == "--wt": opts["wt"] = rest.pop(0)
         elif a == "--exe": opts["exe"] = rest.pop(0)
         elif a == "--": command = rest; break
         else: raise SystemExit(f"unknown option {a}")
-    if opts["hidden"] and opts["here"]:
-        raise SystemExit("--hidden and --here exclude each other")
+    if sum(bool(opts[k]) for k in ("hidden", "here", "console", "wt")) > 1:
+        raise SystemExit("--wt, --console, --hidden and --here exclude each other")
+    command_given = command is not None
+    if command_given and (opts["console"] or opts["wt"]):
+        raise SystemExit("--wt and --console choose the default command; they don't apply to -- COMMAND")
+    host = None  # (wt.exe, name) when PveTerm opens in a Windows Terminal tab
+    if not (command_given or opts["console"] or opts["here"] or opts["hidden"]):
+        if opts["wt"]:
+            # Checked before the pipe is set up; a directory is no program (review R2). lexists keeps a zero-length
+            # App Execution Alias acceptable.
+            if not os.path.lexists(opts["wt"]) or os.path.isdir(opts["wt"]):
+                raise SystemExit(f"--wt: {opts['wt']} is not a file")
+            host = (os.path.abspath(opts["wt"]), "the wt.exe given with --wt")
+        else:
+            # Loaded by path, so it works under `python -I` too (no script folder on sys.path).
+            loc = importlib.util.spec_from_file_location("wt_locate", os.path.join(os.path.dirname(os.path.abspath(__file__)), "wt_locate.py"))
+            wt_locate = importlib.util.module_from_spec(loc)
+            loc.loader.exec_module(wt_locate)
+            found = wt_locate.preferred(wt_locate.scan())
+            if found:
+                host = (found[0], found[2])
     kind, _, spec = target.partition(":")
     u = urllib.parse.urlparse(cfg["PVE_URL"])
     d = {"v": 1, "apiUrl": f"https://{u.hostname}:{u.port or 8006}", "target": kind,
@@ -280,11 +309,22 @@ def term_main(argv):
     exe = opts["exe"] or os.path.join(root, "src", "PveTerm", "bin", "Debug", "net10.0-windows10.0.17763.0", "PveTerm.exe")
     if command is None:
         command = ["{exe}", "console", "--pipe", "{pipe}", "--nonce", "{nonce}"]
+        if host:
+            # As Pve.Api.TerminalLauncher: the descriptor's display name as the tab title, without the ';' that
+            # Windows Terminal reads as a command separator, or quotes.
+            title = {"node": f"{d['node']} shell", "lxc": f"CT {d.get('vmid')} on {d['node']}"}.get(
+                kind, f"VM {d.get('vmid')} {d.get('serial') or 'serial'} on {d['node']}")
+            title = "".join(c for c in title if c.isprintable() and c not in ';"')[:80] or "PveTerm"
+            # The bridge path keeps its ';' but escaped as "\;", a literal ';' to Windows Terminal (review R3).
+            command = [host[0], "-w", "0", "new-tab", "--title", title, "--", exe.replace(";", "\\;")] + command[1:]
     command = [c.replace("{pipe}", name).replace("{nonce}", nonce).replace("{exe}", exe) for c in command]
-    # CREATE_NO_WINDOW : this console (--here, e.g. a terminal multiplexer pane) : CREATE_NEW_CONSOLE
-    flags = 0x08000000 if opts["hidden"] else 0 if opts["here"] else 0x00000010
+    # CREATE_NO_WINDOW : this console (--here, e.g. a terminal multiplexer pane) : nothing for wt.exe (a GUI
+    # program) : CREATE_NEW_CONSOLE
+    flags = 0x08000000 if opts["hidden"] else 0 if opts["here"] or host else 0x00000010
+    where = (f"in {host[1]} ({host[0]})" if host else "in this console" if opts["here"]
+             else "without a window" if opts["hidden"] else "by COMMAND" if command_given else "in a new console")
     print(f"term: {kind} {spec} via the API host; session requested by {'this helper' if opts['prefetch'] else 'PveTerm'}; "
-          f"CA {'pinned from PVE_CA_FILE' if 'caPem' in d else 'system trust'}", flush=True)
+          f"CA {'pinned from PVE_CA_FILE' if 'caPem' in d else 'system trust'}; {where}", flush=True)
     # Hidden runs keep this helper's stdio, so a harness can report; a new console window has its own.
     child = subprocess.Popen(command, creationflags=flags, stdout=sys.stdout if opts["hidden"] else None,
                              stderr=sys.stderr if opts["hidden"] else None)

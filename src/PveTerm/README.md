@@ -30,11 +30,23 @@ A launcher fills in NAME and HEX:
 
 | Terminal | Command |
 |---|---|
-| Windows Terminal | `wt.exe -w new new-tab --title "VM 100 serial0" -- "C:\path\PveTerm.exe" console --pipe NAME --nonce HEX` |
+| Windows Terminal | `"%LOCALAPPDATA%\Microsoft\WindowsApps\wt.exe" -w 0 new-tab --title "VM 100 serial0 on pve1" -- "C:\path\PveTerm.exe" console --pipe NAME --nonce HEX` |
 | conhost | `conhost.exe "C:\path\PveTerm.exe" console --pipe NAME --nonce HEX` |
 | The default terminal | start `PveTerm.exe console ...` with `CREATE_NEW_CONSOLE`; Windows 11 opens it in the default terminal application |
 
-Windows Terminal reads `;` in its arguments as a command separator. PveTerm's arguments never contain one.
+Windows Terminal reads `;` in its arguments as a command separator. PveTerm's arguments never contain one, and the
+title has it removed.
+
+The launcher and `tools/pve-vv.py --term` pick Windows Terminal by themselves when it is installed
+([decision 0042](../../docs/decisions/0042-terminal-choice-detects-windows-terminal-automatic-by-default.md)), and
+start the wt.exe they found by its full path:
+
+1. the Windows Terminal set as Windows' default terminal application (Settings, System, For developers, Terminal);
+2. otherwise the `wt.exe` app execution alias, which runs the package turned on under Settings, Apps, Advanced app
+   settings, App execution aliases;
+3. otherwise Windows Terminal, then Windows Terminal Preview (each package's own alias), then `wt.exe` on PATH.
+
+Without any of them PveTerm opens in a new console. `python tools/wt_locate.py` prints what this machine has.
 
 ## Behaviour
 
@@ -61,8 +73,12 @@ Windows Terminal reads `;` in its arguments as a command separator. PveTerm's ar
 
 ```sh
 python tools/pve-vv.py --term-probe 100              # read-only: privileges, serial ports, TLS
-python tools/pve-vv.py --term qemu:100:serial0       # opens PveTerm in a new console window
+python tools/pve-vv.py --term qemu:100:serial0       # a Windows Terminal tab if one is found, else a new console
+python tools/pve-vv.py --term qemu:100:serial0 --console               # always a new console window
+python tools/pve-vv.py --term qemu:100:serial0 --wt "D:\tools\wt.exe"  # this wt.exe
+python tools/pve-vv.py --term qemu:100:serial0 --here                  # in this console (a multiplexer pane)
 python tools/pve-vv.py --term qemu:100:serial0 -- wt.exe -w new new-tab -- "{exe}" console --pipe "{pipe}" --nonce "{nonce}"
+python tools/wt_locate.py                            # which Windows Terminal the helper and the launcher pick
 ```
 
 The helper verifies the API's certificate for its own requests the way PveTerm does: against the system roots, or

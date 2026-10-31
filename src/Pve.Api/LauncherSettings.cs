@@ -74,7 +74,9 @@ public sealed class LauncherSettings
     const int MaxBytes = 1 << 20;
 
     public List<PveServerConfig> Servers { get; } = [];
-    public TerminalHost Terminal { get; set; } = TerminalHost.Default;
+    /// <summary>Stored as <c>auto</c>, <c>default</c>, <c>wt</c>, <c>wt-preview</c> or <c>conhost</c>; a missing or unknown value is
+    /// <see cref="TerminalHost.Auto"/> (docs/decisions/0042).</summary>
+    public TerminalHost Terminal { get; set; } = TerminalHost.Auto;
     public string? LastServerId { get; set; }
 
     /// <summary>Why the file was not used, for the log; null when it was read or absent.</summary>
@@ -93,7 +95,7 @@ public sealed class LauncherSettings
             var file = JsonSerializer.Deserialize(File.ReadAllBytes(path), LauncherJson.Default.SettingsFile)
                 ?? throw new InvalidDataException("the file is empty");
             if (file.Version != 1) throw new InvalidDataException($"unknown version {file.Version}");
-            s.Terminal = file.Terminal switch { "wt" => TerminalHost.WindowsTerminal, "conhost" => TerminalHost.Conhost, _ => TerminalHost.Default };
+            s.Terminal = ParseTerminal(file.Terminal);
             s.LastServerId = file.LastServer;
             foreach (var d in file.Servers ?? [])
             {
@@ -133,7 +135,7 @@ public sealed class LauncherSettings
         var file = new SettingsFile
         {
             Version = 1,
-            Terminal = Terminal switch { TerminalHost.WindowsTerminal => "wt", TerminalHost.Conhost => "conhost", _ => "default" },
+            Terminal = FormatTerminal(Terminal),
             LastServer = LastServerId,
             Servers = Servers.Select(s => (ServerEntry?)new ServerEntry
             {
@@ -151,6 +153,26 @@ public sealed class LauncherSettings
         File.WriteAllBytes(tmp, JsonSerializer.SerializeToUtf8Bytes(file, LauncherJson.Default.SettingsFile));
         File.Move(tmp, path, overwrite: true);
     }
+
+    /// <summary>An explicit <c>default</c> stays the user's choice; only a missing or unknown value becomes
+    /// <see cref="TerminalHost.Auto"/>.</summary>
+    internal static TerminalHost ParseTerminal(string? value) => value switch
+    {
+        "default" => TerminalHost.Default,
+        "wt" => TerminalHost.WindowsTerminal,
+        "wt-preview" => TerminalHost.WindowsTerminalPreview,
+        "conhost" => TerminalHost.Conhost,
+        _ => TerminalHost.Auto,
+    };
+
+    internal static string FormatTerminal(TerminalHost host) => host switch
+    {
+        TerminalHost.Default => "default",
+        TerminalHost.WindowsTerminal => "wt",
+        TerminalHost.WindowsTerminalPreview => "wt-preview",
+        TerminalHost.Conhost => "conhost",
+        _ => "auto",
+    };
 
     internal sealed class SettingsFile
     {

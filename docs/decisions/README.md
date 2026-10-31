@@ -50,3 +50,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0039](0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md) | PVE sign-in: an API token or a password with TOTP; secrets in Credential Manager (human, 2026-10-31) |
 | [0040](0040-viewers-sharing-a-data-folder-append-whole-lines-to-one-log.md) | Viewers sharing a data folder append whole lines to one viewer.log |
 | [0041](0041-idle-memory-is-trimmed-on-minimize-and-video-end.md) | Idle memory is trimmed when the window is minimized and when the last video stream ends (agent, spec silent, not yet reviewed) |
+| [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md) | The terminal choice detects Windows Terminal (default terminal app, then the wt.exe alias) and is "Automatic" by default (human, 2026-10-31) |
