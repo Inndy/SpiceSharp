@@ -163,3 +163,10 @@ DXGI_PRESENT
 CreateFile
 WriteFile
 FILE_ACCESS_RIGHTS
+// Status overlay (docs/decisions/0044)
+ExtTextOut
+GetTextMetrics
+GdiFlush
+K32GetProcessMemoryInfo
+PROCESS_MEMORY_COUNTERS_EX
+GetCurrentProcess

@@ -34,6 +34,7 @@ public sealed partial class SpiceSession
             // Re-checked under admission: a trim that finished between the first check and here counts too.
             if (!force && now - Interlocked.Read(ref _lastTrimMs) < MinTrimIntervalMs) return false;
             Interlocked.Exchange(ref _lastTrimMs, now);
+            Volatile.Write(ref _lastTrimReason, reason);
             long start = Stopwatch.GetTimestamp();
             long glz = Canvas.TrimGlzPool();
             long spare = PixelBuffers.Trim();
@@ -42,10 +43,17 @@ public sealed partial class SpiceSession
             Log.Info($"memory: trimmed ({reason}): GLZ reuse pool {Mb(glz)} MB, spare pixel buffers {Mb(spare)} MB; " +
                 $"GC heap {Mb(gc.HeapSizeBytes)} MB, {Mb(gc.TotalCommittedBytes)} MB committed; " +
                 $"{Stopwatch.GetElapsedTime(start).TotalMilliseconds:F1} ms");
+            RaiseStatusChanged();
             return true;
         }
         finally { Volatile.Write(ref _trimming, 0); }
     }
+
+    string? _lastTrimReason;
+
+    /// <summary>When the last trim ran (<see cref="Environment.TickCount64"/>) and why; null before any. Any thread.</summary>
+    public (long TickMs, string Reason)? LastTrim =>
+        Volatile.Read(ref _lastTrimReason) is { } reason ? (Interlocked.Read(ref _lastTrimMs), reason) : null;
 
     static string Mb(long bytes) => (bytes / 1048576.0).ToString("F1");
 }

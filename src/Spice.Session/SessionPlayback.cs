@@ -71,6 +71,7 @@ public sealed partial class SpiceSession
                 _audioRate = (int)s.Frequency;
                 _audioStampValid = false;
                 AudioStarted?.Invoke((int)s.Channels, (int)s.Frequency);
+                RaiseStatusChanged();
                 break;
             }
             case PlaybackMsg.Data:
@@ -108,14 +109,17 @@ public sealed partial class SpiceSession
             case PlaybackMsg.Latency:
             {
                 uint latency = r.U32();
-                if (latency != PlaybackLatencyMs) Log.Info($"playback: server latency {latency} ms");
+                if (latency == PlaybackLatencyMs) break;
+                Log.Info($"playback: server latency {latency} ms");
                 PlaybackLatencyMs = latency;
+                RaiseStatusChanged();
                 break;
             }
             case PlaybackMsg.Stop:
                 _audio?.Dispose();
                 _audio = null;
                 AudioStopped?.Invoke();
+                RaiseStatusChanged();
                 break;
             case PlaybackMsg.Volume:
             {

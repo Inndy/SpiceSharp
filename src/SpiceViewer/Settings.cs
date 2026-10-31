@@ -214,6 +214,12 @@ sealed class ViewerSettings
     /// </summary>
     [JsonConverter(typeof(OnByDefaultConverter))]
     public bool TrimGuestPadding { get; set; } = true;
+    /// <summary>
+    /// The status overlay (docs/decisions/0044): connection, display, video, traffic, audio and memory figures over the
+    /// guest picture. Off by default; saved for all VMs.
+    /// </summary>
+    [JsonConverter(typeof(OffByDefaultConverter))]
+    public bool StatusOverlay { get; set; }
     /// <summary>Keyed by <see cref="SettingsStore.VmKey"/>.</summary>
     public Dictionary<string, VmWindowState> Vms { get; set; } = new(StringComparer.Ordinal);
 }

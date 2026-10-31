@@ -108,6 +108,11 @@ public sealed class Canvas : IDisposable
     /// draws narrow a whole-surface area). Read under <see cref="Sync"/>.
     /// </summary>
     public bool PrimaryAreaIsMonitor => Primary is { } p && _hasHead && !(InferenceEnabled && InferenceOpen(p));
+    /// <summary>
+    /// <see cref="PrimaryArea"/> was inferred from the guest's full-frame draws, not named by a monitors config
+    /// (docs/decisions/0035, finding L16). Read under <see cref="Sync"/>; for the status overlay.
+    /// </summary>
+    public bool PrimaryAreaInferred => _headInferred;
     int _monitorId;
     // The head behind PrimaryArea, as sent (a lone head moved to the origin). When the primary surface goes, it is kept
     // with that surface's size until the next primary surface: one of the same size gets it back (a guest waking its

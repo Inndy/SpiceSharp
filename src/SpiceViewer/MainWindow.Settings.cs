@@ -45,6 +45,7 @@ sealed unsafe partial class MainWindow
         _imageCompression = s.ImageCompression;
         _videoCodec = s.VideoCodec;
         _softwareVideo = s.SoftwareVideo;
+        _statusOverlay = s.StatusOverlay;
         // Read by the session when it advertises its codecs, after the hardware probe (over 100 ms from start).
         if (Program.Video is { } video) video.SoftwareEnabled = _softwareVideo;
         if (_session is { } session)
@@ -191,6 +192,7 @@ sealed unsafe partial class MainWindow
         _videoPacing = mode;
         UpdateMenuChecks();
         if (_session is { } session) session.VideoPacing = SessionPacing(mode);
+        InvalidateStatusOverlay();
         SaveSetting(s => s.VideoPacing = mode);
     }
 

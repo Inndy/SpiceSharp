@@ -32,6 +32,8 @@ sealed unsafe partial class MainWindow
         s.CursorMoved += OnGuestCursorMoved;
         s.MouseModeChanged += _ => Post(OnMouseModeChanged);
         s.AgentConnectedChanged += _ => Post(OnAgentChanged);
+        // Streams, playback, memory trims: the status overlay refreshes if it is shown (docs/decisions/0044).
+        s.StatusChanged += () => _presenter?.InvalidateOverlay();
         s.Disconnected += e => Post(() => OnDisconnected(e));
         s.GuestClipboardGrab += types => Post(() => OnGuestClipboardGrab(types));
         s.GuestClipboardData += (t, d) => Post(() => OnGuestClipboardData(t, d));
@@ -78,6 +80,7 @@ sealed unsafe partial class MainWindow
                 PInvoke.DestroyWindow(_hwnd);
                 return;
             }
+            ApplyStatusOverlay();
         }
         _gotFirstFrame = true;
         Log.Info($"guest display {w}x{h}{(x != 0 || y != 0 ? $" at ({x},{y})" : "")}" +
@@ -251,6 +254,7 @@ sealed unsafe partial class MainWindow
     void OnMouseModeChanged()
     {
         if (!ServerMouse) ReleasePointer();
+        InvalidateStatusOverlay();
     }
 
     void OnAgentChanged()
@@ -258,6 +262,7 @@ sealed unsafe partial class MainWindow
         Log.Info($"agent: connected={_session?.AgentConnected} monitors={_session?.AgentSupportsMonitorsConfig} clipboard={_session?.AgentClipboardReady}");
         RequestGuestResize();
         OnHostClipboardChanged();
+        InvalidateStatusOverlay();
     }
 
     /// <summary>Every channel is linked: from now on keys reach the guest, whether or not it has a display yet.</summary>

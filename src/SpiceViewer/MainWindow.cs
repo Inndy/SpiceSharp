@@ -378,7 +378,7 @@ sealed unsafe partial class MainWindow
             UpdateMenuChecks();
             return;
         }
-        // Device created or recreated: the software profile may have changed.
+        // Device created or recreated: the software profile may have changed (the overlay says which adapter).
         UpdateMenuChecks();
         PushLayout();
         p.InvalidateAll();
@@ -571,6 +571,7 @@ sealed unsafe partial class MainWindow
         AppendPopup(_sysMenu, compression, "Image compression");
         AppendPopup(_sysMenu, codec, "Video codec");
         AppendItem(_sysMenu, 0, null);
+        AppendItem(_sysMenu, IdStatusOverlay, $"Show status overlay\t{StatusOverlayHotkey}");
         AppendItem(_sysMenu, IdAbout, "About SpiceViewer…");
         _scalingMenu = scaling;
         _keysMenu = keys;
@@ -628,6 +629,7 @@ sealed unsafe partial class MainWindow
         PInvoke.CheckMenuItem(_codecMenu, IdSoftwareVideo, (uint)(_softwareVideo ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
         // Without libavcodec in spicecodec.dll (an older replacement build) there is no software path to turn on.
         PInvoke.EnableMenuItem(_codecMenu, IdSoftwareVideo, MENU_ITEM_FLAGS.MF_BYCOMMAND | (SoftwareVideo.IsAvailable ? MENU_ITEM_FLAGS.MF_ENABLED : MENU_ITEM_FLAGS.MF_GRAYED));
+        UpdateStatusOverlayMenu();
     }
 
     public bool OnSysCommand(uint cmd)
@@ -666,6 +668,7 @@ sealed unsafe partial class MainWindow
             case IdCodecVp9: SetVideoCodec(VideoCodecMode.Vp9); return true;
             case IdCodecH265: SetVideoCodec(VideoCodecMode.H265); return true;
             case IdSoftwareVideo: SetSoftwareVideo(!_softwareVideo); return true;
+            case IdStatusOverlay: ToggleStatusOverlay(); return true;
             case IdAbout: ShowAbout(); return true;
         }
         return false;

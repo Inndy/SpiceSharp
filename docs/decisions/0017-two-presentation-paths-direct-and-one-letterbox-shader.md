@@ -3,6 +3,10 @@
 - Status: Accepted
 - Date: 2026-10-29
 - Decided by: agent (spec silent), reviewed by Codex
+- Amended by [0044](0044-status-overlay-redraws-only-with-presents-it-already-makes.md) (2026-10-31), decided by:
+  the human (2026-10-31, "允許"): while the status overlay is shown, the letterbox path makes one more blended draw
+  after the guest, with the overlay's own pixel shader; the direct path stays shader-free (the overlay is blended on
+  the CPU). spec.md (Scaling) says so.
 
 - **Context:** the draft's presenter sizes the swap chain to the guest and copies dirty rects into it with no shader; when the aspect ratio can't be locked (maximized, snapped, full screen) it allows one letterbox path with a single full-screen-triangle shader; the software profile is 1:1 only. An earlier version padded a stretched swap chain instead, which distorted Fit at the texture limit (verification finding N4) and resized the buffers for layout changes.
 - **Decision:** `Viewport.Compute` picks the path per update; the presenter and `MainWindow.GuestRect()` (input mapping, cursor clip and position) use the same result.

@@ -48,6 +48,13 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
     /// <summary>The adapter the probe used, for logs and About ("" until known).</summary>
     public string AdapterName { get; private set; } = "";
 
+    // The Media Foundation decoder the probe found per codec (indexed by VideoCodecType), for the status overlay.
+    readonly string?[] _decoderNames = new string?[8];
+
+    /// <summary>The friendly name of the hardware decoder found for <paramref name="codec"/>, or null. Any thread.</summary>
+    public string? DecoderName(VideoCodecType codec) =>
+        (int)codec < _decoderNames.Length ? Volatile.Read(ref _decoderNames[(int)codec]) : null;
+
     /// <summary>
     /// COM (the multithreaded apartment) for the calling thread for one operation, balanced on that thread: S_OK and
     /// S_FALSE are counted initializations and are undone on dispose; RPC_E_CHANGED_MODE (an STA thread) took no count
@@ -109,6 +116,7 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
                     continue;
                 }
                 Log.Info($"video: {c.Name}: hardware decoding with '{mft}' on '{adapter}'");
+                Volatile.Write(ref _decoderNames[(int)c.Codec], mft);
                 found.Add(c.Codec);
             }
             Log.Info($"video: probe took {clock.ElapsedMilliseconds} ms");

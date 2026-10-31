@@ -15,6 +15,10 @@
     <ProjectReference Include="../../src/SpiceViewer/SpiceViewer.csproj" />
     <Compile Include="../../src/SpiceViewer/LogFile.cs" Link="Production/LogFile.cs" />
     <Compile Include="../Spice.Viewer.Tests/LogFileTests.cs" Link="LogFileTests.cs" />
+    <!-- The status overlay's text, rates, blending and GDI image (docs/decisions/0044): no window, device or session. -->
+    <Compile Include="../../src/SpiceViewer/StatusOverlay.cs" Link="Production/StatusOverlay.cs" />
+    <Compile Include="../../src/SpiceViewer/OverlayBitmap.cs" Link="Production/OverlayBitmap.cs" />
+    <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
     <AdditionalFiles Include="../../src/SpiceViewer/NativeMethods.json" />
   </ItemGroup>
 </Project>

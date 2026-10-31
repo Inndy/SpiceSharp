@@ -51,6 +51,8 @@ public sealed partial class SpiceSession
         // frames not decoded because the stream's clip hid all of them when they came due; for the log only, the
         // report counts them as shown (as spice-gtk does: they say nothing about keeping up)
         public uint Hidden;
+        /// <summary>Frames decoded and drawn (for the status overlay); a long so it never wraps in a session.</summary>
+        public long Shown;
         public bool Reporting;
         // pacing: frames waiting for their deadline, oldest first, in a fixed ring (deadlines never decrease along it)
         public readonly QueuedFrame[] Queue = new QueuedFrame[MaxQueuedFrames];
@@ -327,6 +329,7 @@ public sealed partial class SpiceSession
                     // As spice-gtk does when it has no decoder: the server stops encoding and sends the area as images.
                     if (unsupported) ReportUnsupported(sc.Id);
                 }
+                RaiseStatusChanged();
                 break;
             }
             case DisplayMsg.StreamData or DisplayMsg.StreamDataSized:
@@ -362,6 +365,7 @@ public sealed partial class SpiceSession
                 }
                 // The video is over: what its frames and decoding left behind can go (rate-limited, decision 0041).
                 if (lastEnded) TrimMemory("video ended");
+                RaiseStatusChanged();
                 break;
             }
             case DisplayMsg.StreamDestroyAll:
@@ -375,7 +379,7 @@ public sealed partial class SpiceSession
                     ClearFramePool();
                     UpdateWake();
                 }
-                if (hadStreams) TrimMemory("video ended");
+                if (hadStreams) { TrimMemory("video ended"); RaiseStatusChanged(); }
                 break;
             }
             case DisplayMsg.StreamActivateReport:
@@ -577,6 +581,7 @@ public sealed partial class SpiceSession
         string path = decoder.Software ? "software" : "hardware";
         Log.Info($"display: stream {id} is {format}; decoding in {path}");
         Volatile.Write(ref _videoDecoding, $"{format}, {path}");
+        RaiseStatusChanged();
     }
 
     string? _videoDecoding;
@@ -991,7 +996,7 @@ public sealed partial class SpiceSession
         // The stream's TOP_DOWN flag describes how the source surface was laid out; spice-gtk flips the pictures of
         // bottom-up streams, whatever their codec. The clip is the current one, as in spice-gtk: a STREAM_CLIP that
         // arrived while this frame waited keeps it off whatever was drawn over the stream since.
-        try { Canvas.BlitFrame(s.SurfaceId, dest, s.Clip, s.Frame!.View, s.TopDown || mirrored); }
+        try { Canvas.BlitFrame(s.SurfaceId, dest, s.Clip, s.Frame!.View, s.TopDown || mirrored); s.Shown++; }
         catch (CanvasException e) { CountDrop(s, window); Log.Warn($"display: stream frame dropped: {e.Message}"); }
     }
 

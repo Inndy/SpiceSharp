@@ -191,7 +191,7 @@ Why: flip model lets Windows send frames straight to the screen with [lower powe
 
 - With the guest agent: resize the guest to the window, so output stays 1:1.
 - Without an agent: stretch scaling, with the window's aspect ratio locked to the guest's during resize (`WM_SIZING`).
-- When the aspect ratio can't be locked (maximized, snapped): one letterbox path with a single full-screen-triangle shader. It's the only shader in v0.
+- When the aspect ratio can't be locked (maximized, snapped): one letterbox path with a single full-screen-triangle shader. It's the only shader in v0, apart from the status overlay's blend shader, which the letterbox path uses only while the overlay is shown (the human, 2026-10-31; [decisions/0044](../decisions/0044-status-overlay-redraws-only-with-presents-it-already-makes.md)). The direct path uses no shader, overlay or not.
 - Log `IDXGIOutput6::CheckHardwareCompositionSupport` results, to see whether the display scales in hardware.
 
 **Software rendering**
@@ -281,7 +281,7 @@ v0 connects from `.vv` data alone. The PVE API belongs to the optional v1 launch
 
 These are requirements: the viewer MUST do nothing while the guest screen is static.
 
-- MUST present only on change; no render loop and no timer-driven presents.
+- MUST present only on change; no render loop and no timer-driven presents. One exception, approved by the human (2026-10-31): while the status overlay is shown and its figures are still changing, a 1 s one-shot tick refreshes it and presents only its rectangle, only if its text changed; it stops at the first tick that finds nothing changing and never runs while minimized or occluded ([decisions/0044](../decisions/0044-status-overlay-redraws-only-with-presents-it-already-makes.md)).
 - MUST use native cursors, so mouse movement never presents.
 - MUST stop presenting while minimized or occluded, but keep decoding, because GLZ images reference earlier ones.
 - MUST close the WASAPI stream between playback stop and start.

@@ -1,3 +1,14 @@
 CreateFile
 WriteFile
 FILE_ACCESS_RIGHTS
+CreateCompatibleDC
+DeleteDC
+SelectObject
+DeleteObject
+SetBkMode
+SetTextColor
+CreateFontIndirect
+GetTextMetrics
+CreateDIBSection
+ExtTextOut
+GdiFlush

@@ -59,13 +59,17 @@ public sealed class PixelBufferTests(ITestOutputHelper output)
     [Fact]
     public void WarmRentAndReturnAllocateNothing()
     {
+        // Keep this in the non-parallel Allocation profiling collection: session tests trim this process-wide pool.
         PixelBuffers.Trim();
-        PixelBuffers.Return(PixelBuffers.Rent(1 << 20));
-        var m = AllocationWindow.Measure(nameof(WarmRentAndReturnAllocateNothing),
-            () => { for (int i = 0; i < 10_000; i++) PixelBuffers.Return(PixelBuffers.Rent(1 << 20)); },
-            prepare: () => PixelBuffers.Return(PixelBuffers.Rent(1 << 20)), report: output.WriteLine);
-        output.WriteLine($"10000 warm 1 MiB rent/return pairs: {m.Bytes} B");
-        PixelBuffers.Trim();
+        try
+        {
+            PixelBuffers.Return(PixelBuffers.Rent(1 << 20));
+            var m = AllocationWindow.Measure(nameof(WarmRentAndReturnAllocateNothing),
+                () => { for (int i = 0; i < 10_000; i++) PixelBuffers.Return(PixelBuffers.Rent(1 << 20)); },
+                prepare: () => PixelBuffers.Return(PixelBuffers.Rent(1 << 20)), report: output.WriteLine);
+            output.WriteLine($"10000 warm 1 MiB rent/return pairs: {m.Bytes} B");
+        }
+        finally { PixelBuffers.Trim(); }
     }
 }
 

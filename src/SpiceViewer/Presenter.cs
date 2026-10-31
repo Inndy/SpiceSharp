@@ -110,6 +110,28 @@ sealed unsafe class Presenter
     bool _loggedComposition;
     HRESULT _lastPresentError;
 
+    // Status overlay (docs/decisions/0044). _overlay is set by the window; _overlayDirty by any thread; the rest is
+    // worker-only. The overlay never wakes the worker on its own: it refreshes on wakes the presenter has anyway.
+    StatusOverlay? _overlay;
+    int _overlayDirty;
+    OverlayBitmap? _overlayBitmap;
+    int _overlayMargin;
+    SpiceRect _overlayRect;   // where the overlay is in the buffer as last presented; empty when not drawn
+    int _overlayStale;        // direct path: flip buffers that still hold an older overlay picture
+    uint[]? _overlayScratch;  // direct path: the overlay blended over the guest, uploaded as one box
+    ID3D11PixelShader* _overlayPs;
+    ID3D11BlendState* _overlayBlend;
+    ID3D11Buffer* _overlayConstants;
+    ID3D11Texture2D* _overlayTex;
+    ID3D11ShaderResourceView* _overlaySrv;
+    int _overlayTexW, _overlayTexH, _overlayTexVersion = -1;
+    // The overlay's 1 s tick (0044): set by its thread-pool timer, consumed by the worker as a forced refresh.
+    int _overlayTick;
+    readonly ThreadPoolOverlayTimer? _overlayTimer;
+    readonly OverlayTicker? _overlayTicker;
+    /// <summary>Presents of the overlay alone (no guest change), left out of the overlay's presents per second.</summary>
+    public long OverlayPresentCount;
+
     public bool IsSoftware => _isSoftware;
     public string AdapterName { get; private set; } = "";
     /// <summary>Texture size limit of the current device's feature level.</summary>
@@ -127,6 +149,8 @@ sealed unsafe class Presenter
     {
         _hwnd = hwnd;
         _canvas = canvas;
+        _overlayTimer = new ThreadPoolOverlayTimer(OnOverlayTick);
+        _overlayTicker = new OverlayTicker(_overlayTimer);
         _thread = new Thread(Run) { Name = "presenter", IsBackground = true, Priority = ThreadPriority.AboveNormal };
         _thread.Start();
         // Device creation does not involve the window, so this wait cannot deadlock with the message pump.
@@ -211,9 +235,32 @@ sealed unsafe class Presenter
         InvalidateAll();
     }
 
+    /// <summary>
+    /// Shows the status overlay (docs/decisions/0044) over whatever the presenter shows, or hides it (null). Either way
+    /// the next present is a full one, so nothing of an earlier overlay stays in the swap chain.
+    /// </summary>
+    public void SetOverlay(StatusOverlay? overlay)
+    {
+        Volatile.Write(ref _overlay, overlay);
+        InvalidateAll();
+    }
+
+    /// <summary>
+    /// A value the overlay shows changed without a guest frame to carry it (a stream started or ended, the mouse mode
+    /// changed...): refresh the overlay, presenting only its rectangle and only if its text changed. Nothing while the
+    /// overlay is hidden. Cheap; any thread.
+    /// </summary>
+    public void InvalidateOverlay()
+    {
+        if (Volatile.Read(ref _overlay) is null) return;
+        Volatile.Write(ref _overlayDirty, 1);
+        _wake.Set();
+    }
+
     /// <summary>Everything must be re-presented (resize, restore, disconnect overlay).</summary>
     public void InvalidateAll()
     {
+        Volatile.Write(ref _overlayDirty, 1); // the window changed state: the status overlay may say something new
         lock (_lock)
         {
             _fullPending = true;
@@ -317,6 +364,9 @@ sealed unsafe class Presenter
         {
             try { ReleaseAll(); }
             catch (Exception e) { Log.Error($"presenter: release failed: {e}"); }
+            _overlayBitmap?.Dispose();
+            _overlayBitmap = null;
+            _overlayTimer?.Dispose();
             _exited.Set();
         }
     }
@@ -326,9 +376,9 @@ sealed unsafe class Presenter
         long lastPresent = 0;
         var rects = new List<SpiceRect>(MaxRects);
         var presentRects = new List<SpiceRect>(MaxRects);
-        // AddRect keeps every list at MaxRects or fewer (+1: a scroll's destination or its placeholder).
-        // Allocated once, outside the loop.
-        var dirty = stackalloc RECT[MaxRects + 1];
+        // AddRect keeps every list at MaxRects or fewer; up to four more: a scroll's destination or its placeholder, and
+        // the status overlay's new and old rectangles. Allocated once, outside the loop.
+        var dirty = stackalloc RECT[MaxRects + 4];
         var waits = stackalloc HANDLE[2];
         bool slotHeld = false;
         while (true)
@@ -379,6 +429,10 @@ sealed unsafe class Presenter
     HRESULT RenderOnce(List<SpiceRect> rects, List<SpiceRect> presentRects, RECT* dirty, out bool presented)
     {
         presented = false;
+        var overlay = Volatile.Read(ref _overlay);
+        bool overlayChanged = overlay is not null ? PrepareOverlay(overlay) : DropOverlay();
+        bool showOverlay = overlay is not null && _overlayBitmap is { Width: > 0 };
+        bool overlayOnly = false;
         bool full, scroll;
         int dirtyCount = 0;
         RECT scrollRect = default;
@@ -457,13 +511,22 @@ sealed unsafe class Presenter
                 scroll = false;
                 _previous.Clear();
             }
-            if (rects.Count == 0) return S_OK;
+            // The status overlay sits in the shown guest image's top-left corner (buffer pixels).
+            var ov = showOverlay ? PlaceOverlay(vp) : default;
+            var oldOv = _overlayRect;
+            bool overlayMoved = ov != oldOv;
+            if (rects.Count == 0 && !overlayChanged && !overlayMoved) return S_OK;
+            overlayOnly = rects.Count == 0;
+            _overlayRect = ov;
 
             // The part of the guest that is shown (all of it unless it exceeds the texture limit).
             var source = new SpiceRect(0, 0, vp.SourceWidth, vp.SourceHeight);
             if (vp.Direct)
             {
                 EnsureBackBuffer();
+                // Where the overlay was and no longer is gets the guest's pixels back, in this buffer and (as one of
+                // this update's rects) in the next.
+                if (overlayMoved && !oldOv.IsEmpty && !full) { rects.Add(oldOv); presentRects.Add(oldOv); }
                 fixed (byte* px = pixels)
                 {
                     byte* origin = px + (long)ay * stride + ax * 4;
@@ -472,6 +535,13 @@ sealed unsafe class Presenter
                     // the buffer is complete whether or not the compositor applies the scroll itself.
                     foreach (var r in rects) Upload((ID3D11Resource*)_back, origin, stride, r, source);
                     foreach (var r in _previous) Upload((ID3D11Resource*)_back, origin, stride, r, source);
+                    // The overlay is blended on the CPU over the guest pixels just uploaded (the canvas is untouched):
+                    // again whenever guest pixels under it were uploaded raw, and in each flip buffer after it changed.
+                    if (!ov.IsEmpty)
+                    {
+                        if (overlayChanged || overlayMoved) _overlayStale = (int)BufferCount;
+                        if (full || _overlayStale > 0 || Touches(rects, ov) || Touches(_previous, ov)) ComposeOverlay(origin, stride, ov);
+                    }
                 }
                 if (!full)
                 {
@@ -483,7 +553,10 @@ sealed unsafe class Presenter
                     if (scroll)
                     {
                         var from = scrollDest.Offset(scrollDx, scrollDy);
-                        if (scrollDest.Intersect(source) == scrollDest && from.Intersect(source) == from)
+                        // A scroll from or onto the overlay, where it is now or where the previous frame showed it,
+                        // would move overlay pixels with the guest's: plain dirty rects instead (review SO2).
+                        if (scrollDest.Intersect(source) == scrollDest && from.Intersect(source) == from
+                            && Clear(scrollDest, from, ov) && Clear(scrollDest, from, oldOv))
                         {
                             scrollRect = new RECT(scrollDest.Left, scrollDest.Top, scrollDest.Right, scrollDest.Bottom);
                             scrollOffset = new System.Drawing.Point(-scrollDx, -scrollDy); // source to destination
@@ -498,6 +571,7 @@ sealed unsafe class Presenter
                             if (!r.IsEmpty) dirty[dirtyCount++] = new RECT(r.Left, r.Top, r.Right, r.Bottom);
                         }
                     }
+                    if (!ov.IsEmpty && (overlayChanged || overlayMoved)) dirty[dirtyCount++] = new RECT(ov.Left, ov.Top, ov.Right, ov.Bottom);
                     if (dirtyCount == 0) return S_OK; // only cropped-away pixels changed
                 }
             }
@@ -510,12 +584,19 @@ sealed unsafe class Presenter
                     foreach (var r in rects) Upload((ID3D11Resource*)_guestTex, origin, stride, r, source);
                 }
                 var visible = DrawLetterbox(vp, full);
+                // The whole guest image is drawn each time, so the overlay is drawn over it each time, with blending.
+                if (!ov.IsEmpty) DrawOverlay(ov);
                 if (!full)
                 {
                     foreach (var g in rects)
                     {
                         var r = ToBuffer(vp, g.Intersect(source), visible);
                         if (r.right > r.left && r.bottom > r.top) dirty[dirtyCount++] = r;
+                    }
+                    if (overlayChanged || overlayMoved)
+                    {
+                        if (!ov.IsEmpty) dirty[dirtyCount++] = new RECT(ov.Left, ov.Top, ov.Right, ov.Bottom);
+                        if (overlayMoved && !oldOv.IsEmpty) dirty[dirtyCount++] = new RECT(oldOv.Left, oldOv.Top, oldOv.Right, oldOv.Bottom);
                     }
                     if (dirtyCount == 0) return S_OK;
                 }
@@ -548,6 +629,8 @@ sealed unsafe class Presenter
         }
         _lastPresentError = S_OK;
         _recoveredWithoutPresent = false;
+        if (_overlayStale > 0) _overlayStale--;
+        if (overlayOnly) Interlocked.Increment(ref OverlayPresentCount);
         if (scroll && !full) ScrollPresentCount++;
         _previous.Clear();
         _previous.AddRange(rects);
@@ -641,6 +724,252 @@ sealed unsafe class Presenter
         _context->PSSetSamplers(0, 1, &sampler);
         _context->Draw(3, 0);
         return visible;
+    }
+
+    // ---------------- status overlay (docs/decisions/0044) ----------------
+
+    /// <summary>
+    /// Before the canvas lock: refreshes the overlay's text when this wake calls for it (see
+    /// <see cref="StatusOverlay.ShouldRefresh"/>) and redraws its image when the text or the font size changed. Returns
+    /// true when the image changed, so this update presents it. Reads the layout the update will most likely use; if the
+    /// guest changes size in between, the next update corrects it.
+    /// </summary>
+    bool PrepareOverlay(StatusOverlay overlay)
+    {
+        bool forced = Interlocked.Exchange(ref _overlayDirty, 0) != 0;
+        var ticker = _overlayTicker;
+        if (Interlocked.Exchange(ref _overlayTick, 0) != 0)
+        {
+            ticker?.Fired();
+            forced = true; // a tick is a refresh; it presents only if the text changed
+        }
+        int gw, gh;
+        lock (_canvas.Sync)
+        {
+            if (_canvas.Primary is not null) { var area = _canvas.PrimaryArea; gw = area.Width; gh = area.Height; }
+            else if (Volatile.Read(ref _placeholder) is { } placeholder) { gw = placeholder.Width; gh = placeholder.Height; }
+            else gw = gh = 0;
+        }
+        if (gw <= 0 || gh <= 0)
+        {
+            if (forced) Volatile.Write(ref _overlayDirty, 1); // nothing to show it over yet; keep the request
+            return false;
+        }
+        int cw, ch;
+        bool oneToOne, guestPresenting;
+        lock (_lock)
+        {
+            guestPresenting = _fullPending || _pending.Count > 0 || FullFrames;
+            cw = _clientW; ch = _clientH; oneToOne = _oneToOne;
+            if (!_layoutSet)
+            {
+                PInvoke.GetClientRect(_hwnd, out var rc);
+                cw = rc.Width; ch = rc.Height;
+            }
+        }
+        cw = Math.Max(1, cw); ch = Math.Max(1, ch);
+        var vp = Viewport.Compute(cw, ch, gw, gh, oneToOne || _isSoftware, _maxDim);
+        if (vp != _vp) forced = true; // path, buffer or scale changed: shown in the overlay
+        long now = Environment.TickCount64;
+        bool textChanged = false;
+        if (overlay.WantsRefresh(now, forced, guestPresenting))
+        {
+            var s = overlay.Snapshot;
+            s.Direct = vp.Direct;
+            s.BufferW = vp.BufferWidth; s.BufferH = vp.BufferHeight;
+            // Client pixels per guest pixel: the destination's scale, times DXGI's stretch of the buffer to the client.
+            s.Scale = (double)vp.Height / Math.Max(1, vp.SourceHeight) * ch / Math.Max(1, vp.BufferHeight);
+            s.Adapter = AdapterName;
+            s.Software = _isSoftware;
+            s.Presents = Interlocked.Read(ref PresentCount) - Interlocked.Read(ref OverlayPresentCount);
+            textChanged = overlay.Refresh(now, DateTime.Now.TimeOfDay);
+            ticker?.AfterRefresh(overlay.Live);
+        }
+        var bitmap = _overlayBitmap ??= new OverlayBitmap();
+        // A layout-only wake with nothing forced and no guest change (an aspect-locked resize: DXGI stretches the
+        // unchanged buffer and nothing is presented) keeps the image and its place; a new font size waits for the next
+        // present the viewer makes anyway or the next overlay change (review SO1).
+        if (!forced && !guestPresenting && bitmap.Width > 0) return false;
+        // Sized for the screen: 13 px text and an 8 px margin at 96 DPI, in buffer pixels (DXGI stretches the direct
+        // path's guest-sized buffer to the client).
+        uint dpi = PInvoke.GetDpiForWindow(_hwnd);
+        double k = (dpi == 0 ? 1.0 : dpi / 96.0) * vp.BufferHeight / ch;
+        int fontPx = Math.Clamp((int)Math.Round(13 * k), 8, 96);
+        _overlayMargin = Math.Max(1, (int)Math.Round(8 * k));
+        if (!textChanged && bitmap.FontPx == fontPx && bitmap.Width > 0) return false;
+        if (bitmap.Render(overlay.Text, fontPx)) return true;
+        Log.Warn("presenter: the status overlay could not be drawn");
+        return false;
+    }
+
+    /// <summary>The 1 s tick (thread pool): wake the worker for a refresh.</summary>
+    void OnOverlayTick()
+    {
+        Volatile.Write(ref _overlayTick, 1);
+        _wake.Set();
+    }
+
+    /// <summary>The overlay is hidden: stop its tick, let its image and GPU copy go. The full present SetOverlay asked for removes it.</summary>
+    bool DropOverlay()
+    {
+        _overlayTicker?.Stop();
+        Volatile.Write(ref _overlayTick, 0);
+        if (_overlayBitmap is null && _overlayTex is null) return false;
+        _overlayBitmap?.Dispose();
+        _overlayBitmap = null;
+        ReleaseOverlayTexture();
+        _overlayRect = default;
+        _overlayStale = 0;
+        return false;
+    }
+
+    /// <summary>The overlay's rectangle in buffer pixels: inside the top-left corner of the shown guest image, cut to it.</summary>
+    SpiceRect PlaceOverlay(in Viewport vp)
+    {
+        var bitmap = _overlayBitmap!;
+        int l, t, r, b;
+        if (vp.Direct) { l = 0; t = 0; r = vp.SourceWidth; b = vp.SourceHeight; }
+        else
+        {
+            l = Math.Max(vp.X, 0); t = Math.Max(vp.Y, 0);
+            r = Math.Min(vp.X + vp.Width, vp.BufferWidth); b = Math.Min(vp.Y + vp.Height, vp.BufferHeight);
+        }
+        int x = l + _overlayMargin, y = t + _overlayMargin;
+        int w = Math.Min(bitmap.Width, r - x), h = Math.Min(bitmap.Height, b - y);
+        return w > 0 && h > 0 ? new SpiceRect(x, y, x + w, y + h) : default;
+    }
+
+    /// <summary>Neither the scroll's destination nor its source meets <paramref name="overlay"/> (empty: nothing to meet).</summary>
+    static bool Clear(SpiceRect dest, SpiceRect from, SpiceRect overlay) =>
+        overlay.IsEmpty || (dest.Intersect(overlay).IsEmpty && from.Intersect(overlay).IsEmpty);
+
+    static bool Touches(List<SpiceRect> rects, SpiceRect r)
+    {
+        foreach (var x in rects) if (!x.Intersect(r).IsEmpty) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Direct path: blends the overlay over the guest pixels of <paramref name="ov"/> (area coordinates, read at
+    /// <paramref name="origin"/>) on the CPU and uploads the result into the back buffer. No shader on this path.
+    /// </summary>
+    void ComposeOverlay(byte* origin, int stride, SpiceRect ov)
+    {
+        var bitmap = _overlayBitmap!;
+        int w = ov.Width, h = ov.Height;
+        if (_overlayScratch is null || _overlayScratch.Length < w * h) _overlayScratch = new uint[w * h]; // grows only
+        fixed (uint* dst = _overlayScratch)
+        {
+            for (int y = 0; y < h; y++)
+            {
+                OverlayBlend.Row(new ReadOnlySpan<uint>(bitmap.Bits + (long)y * bitmap.Stride, w),
+                    new ReadOnlySpan<uint>(origin + (long)(ov.Top + y) * stride + ov.Left * 4, w),
+                    new Span<uint>(dst + (long)y * w, w));
+            }
+            var box = new D3D11_BOX { left = (uint)ov.Left, top = (uint)ov.Top, right = (uint)ov.Right, bottom = (uint)ov.Bottom, front = 0, back = 1 };
+            _context->UpdateSubresource((ID3D11Resource*)_back, 0, &box, dst, (uint)(w * 4), 0);
+        }
+    }
+
+    /// <summary>
+    /// Letterbox path: draws the overlay texture into <paramref name="ov"/> with premultiplied-alpha blending, after the
+    /// guest image. Uploads the image first if it changed (or the device is new).
+    /// </summary>
+    void DrawOverlay(SpiceRect ov)
+    {
+        var bitmap = _overlayBitmap!;
+        EnsureOverlayPipeline();
+        if (_overlayTex is null || _overlayTexW != bitmap.Width || _overlayTexH != bitmap.Height)
+        {
+            ReleaseOverlayTexture();
+            var desc = new D3D11_TEXTURE2D_DESC
+            {
+                Width = (uint)bitmap.Width,
+                Height = (uint)bitmap.Height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc = new DXGI_SAMPLE_DESC { Count = 1 },
+                Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT,
+                BindFlags = D3D11_BIND_FLAG.D3D11_BIND_SHADER_RESOURCE,
+            };
+            ID3D11Texture2D* tex;
+            _device->CreateTexture2D(&desc, null, &tex);
+            _overlayTex = tex;
+            ID3D11ShaderResourceView* srv;
+            _device->CreateShaderResourceView((ID3D11Resource*)tex, null, &srv);
+            _overlaySrv = srv;
+            _overlayTexW = bitmap.Width; _overlayTexH = bitmap.Height;
+        }
+        if (_overlayTexVersion != bitmap.Version)
+        {
+            _context->UpdateSubresource((ID3D11Resource*)_overlayTex, 0, null, bitmap.Bits, (uint)bitmap.Stride, 0);
+            _overlayTexVersion = bitmap.Version;
+        }
+        // The part of the texture shown: all of it unless the guest image is smaller than the overlay.
+        var uv = stackalloc float[4];
+        uv[0] = 0; uv[1] = 0;
+        uv[2] = (float)ov.Width / bitmap.Width;
+        uv[3] = (float)ov.Height / bitmap.Height;
+        _context->UpdateSubresource((ID3D11Resource*)_overlayConstants, 0, null, uv, 0, 0);
+        var viewport = new D3D11_VIEWPORT { TopLeftX = ov.Left, TopLeftY = ov.Top, Width = ov.Width, Height = ov.Height, MinDepth = 0, MaxDepth = 1 };
+        _context->RSSetViewports(1, &viewport);
+        var cb = _overlayConstants;
+        _context->VSSetConstantBuffers(0, 1, &cb);
+        _context->PSSetShader(_overlayPs, null, 0);
+        var srvs = _overlaySrv;
+        _context->PSSetShaderResources(0, 1, &srvs);
+        var sampler = _pointSampler;
+        _context->PSSetSamplers(0, 1, &sampler);
+        _context->OMSetBlendState(_overlayBlend, null, 0xFFFFFFFF);
+        _context->Draw(3, 0);
+        _context->OMSetBlendState(null, null, 0xFFFFFFFF);
+    }
+
+    /// <summary>The overlay's pixel shader, blend state and constant buffer (once per device; the rest is the letterbox's).</summary>
+    void EnsureOverlayPipeline()
+    {
+        EnsureLetterboxPipeline();
+        if (_overlayPs is not null) return;
+        var psCode = Shaders.OverlayPS;
+        fixed (byte* psc = psCode)
+        {
+            ID3D11PixelShader* ps;
+            _device->CreatePixelShader(psc, (nuint)psCode.Length, null, &ps);
+            _overlayPs = ps;
+        }
+        var blend = new D3D11_BLEND_DESC();
+        blend.RenderTarget._0 = new D3D11_RENDER_TARGET_BLEND_DESC
+        {
+            BlendEnable = true,
+            SrcBlend = D3D11_BLEND.D3D11_BLEND_ONE,
+            DestBlend = D3D11_BLEND.D3D11_BLEND_INV_SRC_ALPHA,
+            BlendOp = D3D11_BLEND_OP.D3D11_BLEND_OP_ADD,
+            SrcBlendAlpha = D3D11_BLEND.D3D11_BLEND_ONE,
+            DestBlendAlpha = D3D11_BLEND.D3D11_BLEND_INV_SRC_ALPHA,
+            BlendOpAlpha = D3D11_BLEND_OP.D3D11_BLEND_OP_ADD,
+            RenderTargetWriteMask = 0x0F, // D3D11_COLOR_WRITE_ENABLE_ALL
+        };
+        ID3D11BlendState* state;
+        _device->CreateBlendState(&blend, &state);
+        _overlayBlend = state;
+        var cbDesc = new D3D11_BUFFER_DESC
+        {
+            ByteWidth = 16,
+            Usage = D3D11_USAGE.D3D11_USAGE_DEFAULT,
+            BindFlags = D3D11_BIND_FLAG.D3D11_BIND_CONSTANT_BUFFER,
+        };
+        ID3D11Buffer* cbuf;
+        _device->CreateBuffer(&cbDesc, null, &cbuf);
+        _overlayConstants = cbuf;
+    }
+
+    void ReleaseOverlayTexture()
+    {
+        if (_overlaySrv is not null) { _overlaySrv->Release(); _overlaySrv = null; }
+        if (_overlayTex is not null) { _overlayTex->Release(); _overlayTex = null; }
+        _overlayTexW = _overlayTexH = 0;
+        _overlayTexVersion = -1;
     }
 
     void EnsureBackBuffer()
@@ -951,6 +1280,12 @@ sealed unsafe class Presenter
     {
         ReleaseTargets();
         ReleaseGuestTexture();
+        ReleaseOverlayTexture();
+        Release(ref _overlayConstants);
+        Release(ref _overlayBlend);
+        Release(ref _overlayPs);
+        _overlayRect = default;
+        _overlayStale = 0;
         Release(ref _linearSampler);
         Release(ref _pointSampler);
         Release(ref _constants);

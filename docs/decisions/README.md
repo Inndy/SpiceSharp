@@ -25,7 +25,7 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0014](0014-native-aot-links-with-msvc-on-windows.md) | Native AOT links with MSVC on Windows |
 | [0015](0015-windows-tfm-net10-0-windows10-0-17763-0.md) | Windows TFM `net10.0-windows10.0.17763.0` |
 | [0016](0016-hand-declared-getwindowlongptrw-setwindowlongptrw.md) | Hand-declared `GetWindowLongPtrW`/`SetWindowLongPtrW` |
-| [0017](0017-two-presentation-paths-direct-and-one-letterbox-shader.md) | Two presentation paths: direct and one letterbox shader |
+| [0017](0017-two-presentation-paths-direct-and-one-letterbox-shader.md) | Two presentation paths: direct and one letterbox shader (plus the status overlay's blend draw while shown, 0044; the human, 2026-10-31) |
 | [0018](0018-presenter-owns-its-graphics-objects-device-loss-recreates-on.md) | Presenter owns its graphics objects; device loss recreates once |
 | [0019](0019-viewport-beyond-the-texture-limit.md) | Viewport beyond the texture limit |
 | [0020](0020-v0-ships-as-a-portable-zip.md) | v0 ships as a portable zip |
@@ -52,3 +52,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0041](0041-idle-memory-is-trimmed-on-minimize-and-video-end.md) | Idle memory is trimmed when the window is minimized and when the last video stream ends (agent, spec silent, not yet reviewed) |
 | [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md) | The terminal choice detects Windows Terminal (default terminal app, then the wt.exe alias) and is "Automatic" by default (human, 2026-10-31) |
 | [0043](0043-vnc-consoles-bridge-to-the-users-vnc-viewer.md) | VNC consoles: a local bridge (`PveTerm vnc`) to the user's own VNC viewer; process-checked loopback port, shared session, keep-alive; supersedes the built-in client of 0034 (human, 2026-10-31) |
+| [0044](0044-status-overlay-redraws-only-with-presents-it-already-makes.md) | A toggleable status overlay (window menu, Ctrl+Alt+Shift+F12, off by default) that redraws with presents the viewer already makes, plus a 1 s tick only while its figures change; CPU-blended on the direct path, one blended draw on the letterbox path (shader and tick approved by the human, 2026-10-31) |

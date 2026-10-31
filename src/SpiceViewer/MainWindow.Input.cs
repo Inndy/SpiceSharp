@@ -190,6 +190,13 @@ sealed unsafe partial class MainWindow
             _session?.SendCtrlAltDel();
             return true;
         }
+        // The viewer's own hotkey (docs/decisions/0044), after the .vv ones so a .vv hotkey with the same keys wins.
+        if (Matches(StatusOverlayHotkey, vk, mods))
+        {
+            _session?.ReleaseAllKeys(); // the modifiers already reached the guest
+            Post(ToggleStatusOverlay);
+            return true;
+        }
         return false;
     }
 

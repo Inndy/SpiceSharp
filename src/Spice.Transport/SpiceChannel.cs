@@ -37,6 +37,13 @@ public sealed class SpiceChannel : IAsyncDisposable, IValueTaskSource
     public CapabilitySet ServerChannelCaps { get; }
     public bool IsClosed => _disposed != 0;
 
+    // Written only by the receive loop; read from any thread (64-bit reads are atomic on the supported platforms).
+    long _bytesReceived, _messagesReceived;
+    /// <summary>Bytes received after the link (headers included). Diagnostics; any thread.</summary>
+    public long BytesReceived => Volatile.Read(ref _bytesReceived);
+    /// <summary>Messages received after the link, the common ones included. Diagnostics; any thread.</summary>
+    public long MessagesReceived => Volatile.Read(ref _messagesReceived);
+
     SpiceChannel(Stream stream, ChannelId id, LinkReply reply)
     {
         _stream = stream;
@@ -143,6 +150,8 @@ public sealed class SpiceChannel : IAsyncDisposable, IValueTaskSource
                 }
                 var body = payload.AsMemory(0, (int)h.Size);
                 await _stream.ReadExactlyAsync(body, ct);
+                Volatile.Write(ref _bytesReceived, _bytesReceived + headerSize + h.Size);
+                Volatile.Write(ref _messagesReceived, _messagesReceived + 1);
 
                 // Every server message counts toward the ack window, including the ones handled here.
                 if (_ackWindow > 0 && ++_sinceAck >= _ackWindow)

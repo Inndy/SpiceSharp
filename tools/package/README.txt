@@ -61,10 +61,41 @@ Keys (defaults; a .vv file may override them)
 ---------------------------------------------
   Ctrl+Alt+R   release keyboard and mouse back to Windows (click the window to capture again)
   Shift+F11    toggle full screen
+  Ctrl+Alt+Shift+F12   show or hide the status overlay (not set by .vv files; a .vv hotkey with
+               the same keys wins)
   The window menu (right-click the title bar) has Send Ctrl+Alt+Del, Send Win+L,
   scaling (fit / 1:1), when to capture system shortcuts, resize guest to window,
   "Show guest cursor in server mouse mode", "Video pacing", "Fast JPEG decoding",
-  "Image compression", "Video codec", and About.
+  "Image compression", "Video codec", "Show status overlay", and About.
+
+Status overlay (window menu "Show status overlay" or Ctrl+Alt+Shift+F12; off by default, saved
+  for all VMs): a few lines of figures in the top-left corner of the guest picture, on a dark
+  see-through background. The guest picture itself, screenshots and recordings of it are not
+  changed. It shows:
+    the VM title and the time the figures were taken, and the span the rates cover;
+    conn   connection state, TLS, whether a proxy is used (never its address or the password),
+           channels, mouse mode (client or server), whether the guest agent is connected;
+    disp   the guest's screen size, and the surface behind it when that is larger (with
+           "inferred" when the screen was worked out from the guest's drawing), fit or 1:1 and
+           the scale;
+    pres   the presentation path (direct or letterbox) and buffer size, presents per second,
+           the graphics adapter ("software" for WARP or Remote Desktop's renderer);
+    net    bytes and messages per second received, and the display channel's share;
+    video  each video stream: codec, how it is decoded (libjpeg-turbo, graphics card through
+           Media Foundation with the decoder's name, or FFmpeg on the CPU), size, frames per
+           second shown, frames shown and dropped; and the video pacing setting;
+    audio  playing or idle, codec, sample rate and channels, the server's latency;
+    mem    the viewer's private memory and .NET heap, and the last memory trim.
+  It updates once a second while its figures are changing: while data arrives, a video stream
+  runs or audio plays. It also updates at once when a stream starts or ends, the mouse mode or
+  guest agent changes, or the window changes mode or how the picture is fitted. A resize that
+  only stretches the picture stretches the overlay with it until the next update.
+  To save power, it stops updating about a second after everything goes quiet, showing the
+  final figures (zero rates). It doesn't update while the window is minimized or covered.
+  When the guest draws something again, or a stream or sound starts, it resumes. The time on
+  its first line says when the figures were taken.
+  It shows over the guest picture, the "display off" message and the disconnected screen, but
+  not before the first picture (the "Connecting" text).
 
 Video pacing (window menu, saved for all VMs): how guest video streams are timed.
   Off (default)            every frame is drawn as soon as it arrives: the lowest latency
