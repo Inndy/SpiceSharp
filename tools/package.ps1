@@ -57,8 +57,11 @@ if ($withLauncher) {
     $launcherStage = Join-Path $stage "PveLauncher"
     # WinUI's own strings ship as <lang>\*.dll.mui; only en-US is kept, which is also MUI's last fallback (human,
     # 2026-10-31: "這版先只留英文").
+    # data\ is where a launcher run from the publish folder keeps its settings and log; never ship it.
+    $launcherData = Join-Path $launcherPublish "data"
     $files = Get-ChildItem -Recurse -File $launcherPublish |
-        Where-Object { $_.Extension -ne ".pdb" -and ($_.Extension -ne ".mui" -or $_.Directory.Name -eq "en-US") }
+        Where-Object { $_.Extension -ne ".pdb" -and ($_.Extension -ne ".mui" -or $_.Directory.Name -eq "en-US") } |
+        Where-Object { -not $_.FullName.StartsWith($launcherData + [IO.Path]::DirectorySeparatorChar) }
     foreach ($f in $files) {
         $dst = Join-Path $launcherStage $f.FullName.Substring($launcherPublish.Length + 1)
         New-Item -ItemType Directory -Force (Split-Path -Parent $dst) | Out-Null
