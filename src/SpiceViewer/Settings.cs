@@ -203,6 +203,12 @@ sealed class ViewerSettings
     [JsonConverter(typeof(VideoCodecModeConverter))]
     public VideoCodecMode VideoCodec { get; set; } = VideoCodecMode.Auto;
     /// <summary>
+    /// Decode the H.264 streams no hardware decoder takes (spice-server's 4:4:4) in software (docs/decisions/0037,
+    /// amended 2026-10-31). On by default; off spends bandwidth (MJPEG) instead of CPU.
+    /// </summary>
+    [JsonConverter(typeof(OnByDefaultConverter))]
+    public bool SoftwareVideo { get; set; } = true;
+    /// <summary>
     /// Trim Linux guest padding: infer a Linux guest's monitor from its full-frame draws when the server names the whole
     /// padded surface (docs/decisions/0035, finding L16). On by default; a file without the key reads as on.
     /// </summary>

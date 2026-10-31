@@ -67,6 +67,19 @@ internal static unsafe partial class CodecApi
     [LibraryImport("spicecodec.dll")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int sc_lz4_decode(byte* src, nuint srcLen, byte* dst, nuint dstCap);
+    // Software H.264 (libavcodec, h264_bridge.c). Optional exports: see H264Decoder.IsAvailable.
+    [LibraryImport("spicecodec.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint sc_h264_open(int threads);
+    [LibraryImport("spicecodec.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void sc_h264_close(nint h);
+    [LibraryImport("spicecodec.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int sc_h264_decode(nint h, byte* data, nuint len, H264Picture* info);
+    [LibraryImport("spicecodec.dll")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int sc_h264_convert(nint h, byte* dst, nuint dstCap, int stride, int flags);
     // TJPARAM (turbojpeg.h of libjpeg-turbo 3.1.2; the enum has no explicit values, so these are its positions).
     internal const int TJPARAM_STOPONWARNING = 0, TJPARAM_QUALITY = 3, TJPARAM_SUBSAMP = 4, TJPARAM_JPEGWIDTH = 5,
         TJPARAM_JPEGHEIGHT = 6, TJPARAM_FASTUPSAMPLE = 9, TJPARAM_FASTDCT = 10;

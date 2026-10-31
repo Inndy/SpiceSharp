@@ -78,7 +78,8 @@ if ($withLauncher) {
 $jpeg = Get-ChildItem $deps -Directory -Filter "libjpeg-turbo-*" | Select-Object -First 1
 $opus = Get-ChildItem $deps -Directory -Filter "opus-*" | Select-Object -First 1
 $lz4 = Get-ChildItem $deps -Directory -Filter "lz4-*" | Select-Object -First 1
-if (-not $jpeg -or -not $opus -or -not $lz4) { throw "native/downloads is missing libjpeg-turbo, opus or lz4 sources (run bash native/fetch.sh)" }
+$ffmpeg = Get-ChildItem $deps -Directory -Filter "ffmpeg-*" | Select-Object -First 1
+if (-not $jpeg -or -not $opus -or -not $lz4 -or -not $ffmpeg) { throw "native/downloads is missing libjpeg-turbo, opus, lz4 or FFmpeg sources (run bash native/fetch.sh)" }
 $lic = Join-Path $root "licenses"
 $nuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME ".nuget/packages" }
 $assets = Get-Content -Raw (Join-Path $root "src/SpiceViewer/obj/project.assets.json") | ConvertFrom-Json
@@ -109,6 +110,9 @@ $components = @(
        Url = "https://github.com/ariya/FastLZ"; Texts = @((Join-Path $lic "fastlz-MIT.txt")) },
     @{ Name = "spice-protocol headers (v0.14.3)"; In = "spicecodec.dll"; License = "BSD-3-Clause (macros.h: LGPL-2.1-or-later)"
        Url = "https://gitlab.freedesktop.org/spice/spice-protocol"; Texts = @((Join-Path $lic "spice-protocol-BSD-3-Clause.txt")) },
+    @{ Name = "$($ffmpeg.Name) (libavcodec H.264 decoder and libavutil; configured without GPL or nonfree parts, unmodified)"; In = "spicecodec.dll"; License = "LGPL-2.1-or-later"
+       Url = "https://ffmpeg.org (source: https://ffmpeg.org/releases/$($ffmpeg.Name).tar.xz, in source\native\downloads; built by source\native\build.sh)"
+       Texts = @((Join-Path $ffmpeg.FullName "LICENSE.md"), (Join-Path $ffmpeg.FullName "COPYING.LGPLv2.1")) },
     @{ Name = "$($lz4.Name) (block decoder, lib/lz4.c)"; In = "spicecodec.dll"; License = "BSD-2-Clause"
        Url = "https://github.com/lz4/lz4"; Texts = @((Join-Path $lz4.FullName "lib/LICENSE")) },
     @{ Name = $jpeg.Name; In = "turbojpeg.dll"; License = "IJG, BSD-3-Clause and zlib"
@@ -199,7 +203,7 @@ foreach ($c in $components) {
 Set-Content -NoNewline -Encoding utf8 (Join-Path $stage "LICENSE.txt") $t.ToString()
 
 # Corresponding source for the LGPL library: every committed file under native/, which is everything needed to
-# rebuild and replace spicecodec.dll (fetch.sh downloads the pinned libjpeg-turbo, opus and lz4 sources by hash).
+# rebuild and replace spicecodec.dll (fetch.sh downloads the pinned libjpeg-turbo, opus, lz4 and FFmpeg sources by hash).
 $nativeFiles = git -C $root ls-files native
 if ($LASTEXITCODE -ne 0 -or -not $nativeFiles) { throw "git ls-files native failed" }
 foreach ($f in $nativeFiles) {
@@ -207,6 +211,12 @@ foreach ($f in $nativeFiles) {
     New-Item -ItemType Directory -Force (Split-Path -Parent $dst) | Out-Null
     Copy-Item (Join-Path $root $f) $dst
 }
+# FFmpeg is LGPL code inside spicecodec.dll: its pinned source tarball goes with the binary (where fetch.sh looks for
+# it, so a rebuild from source\native needs no download), not only a link to ffmpeg.org.
+$ffmpegTarball = Join-Path $deps "$($ffmpeg.Name).tar.xz"
+if (-not (Test-Path $ffmpegTarball)) { throw "missing $ffmpegTarball (run bash native/fetch.sh)" }
+New-Item -ItemType Directory -Force (Join-Path $stage "source/native/downloads") | Out-Null
+Copy-Item $ffmpegTarball (Join-Path $stage "source/native/downloads")
 
 $zip = Join-Path $artifacts "$name.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }

@@ -80,6 +80,32 @@ SC_API int      SC_CALL sc_glz_decode(sc_glz *, const uint8_t *data, size_t len,
    Allocates nothing. */
 SC_API int      SC_CALL sc_lz4_decode(const uint8_t *src, size_t src_len, uint8_t *dst, size_t dst_cap);
 
+/* ---- H.264 (libavcodec, h264_bridge.c) ---- */
+/* Software H.264 decoding for the streams hardware decoders refuse (High 4:4:4 Predictive and the rest of the 8-bit
+   High profiles). Optional: the interface version stays 2, and a DLL without these functions only has no software
+   video path. One handle per stream, used from one thread at a time. */
+typedef struct sc_h264 sc_h264;
+typedef struct {
+    int width, height;  /* the cropped picture size */
+    int chroma;         /* 0 monochrome, 1 4:2:0, 2 4:2:2, 3 4:4:4 */
+    int supported;      /* sc_h264_convert takes the picture: 8-bit YUV, GBR or gray */
+    int full_range;
+    int matrix;         /* H.264 matrix_coefficients (AVColorSpace): 0 GBR, 1 BT.709, 5/6 BT.601, 2 unspecified... */
+} sc_h264_picture;
+#define SC_H264_PICTURE 1   /* a picture was decoded; *info describes it */
+#define SC_H264_NONE 0      /* the data was taken, no picture yet */
+#define SC_H264_INVALID (-1) /* the data is damaged; the decoder can go on */
+#define SC_H264_FATAL (-2)   /* out of memory or an internal error; close the handle */
+#define SC_H264_MIRROR 1    /* sc_h264_convert flag: write the rows bottom-up */
+/* threads: slice threads (1-16). NULL when libavcodec can't be set up. */
+SC_API sc_h264 *SC_CALL sc_h264_open(int threads);
+SC_API void     SC_CALL sc_h264_close(sc_h264 *);
+/* Decodes one access unit (Annex B). The newest picture is kept for sc_h264_convert until the next picture. */
+SC_API int      SC_CALL sc_h264_decode(sc_h264 *, const uint8_t *data, size_t len, sc_h264_picture *info);
+/* Converts the newest picture to opaque BGRA rows (stride bytes apart, at least width * 4) at its own size. Returns 0,
+   or -1 without a picture, with an unsupported format or when dst_cap is too small. */
+SC_API int      SC_CALL sc_h264_convert(sc_h264 *, uint8_t *dst, size_t dst_cap, int stride, int flags);
+
 #ifdef __cplusplus
 }
 #endif

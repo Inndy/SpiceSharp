@@ -43,6 +43,19 @@ public interface IVideoDecoder : IDisposable
     /// because it can't take this server's stream, so the session doesn't avoid its codec (docs/decisions/0037).
     /// </summary>
     bool HasDecoded => false;
+
+    /// <summary>
+    /// The decoder runs on the CPU (libavcodec), not on a GPU's video decoder. A hardware decoder that fails before its
+    /// first picture can then be replaced by a software one for the codec's later streams instead of avoiding the codec.
+    /// </summary>
+    bool Software => false;
+
+    /// <summary>
+    /// Whether this decoder takes the format its stream's first frames declare (<see cref="VideoBitstream"/>). When it
+    /// doesn't but <see cref="IVideoDecoderFactory.CanDecode"/> does, the session replaces it with
+    /// <see cref="IVideoDecoderFactory.Create(in VideoFormat, int, int, bool)"/> before the frame is decoded.
+    /// </summary>
+    bool Takes(in VideoFormat format) => true;
 }
 
 /// <summary>Creates decoders for the codecs the app can decode besides MJPEG, which the session decodes itself.</summary>
@@ -67,6 +80,23 @@ public interface IVideoDecoderFactory
     /// server for other codecs (docs/decisions/0037). Formats not read (HEVC) are not checked.
     /// </summary>
     bool CanDecode(in VideoFormat format) => true;
+
+    /// <summary>Whether a software decoder takes <paramref name="format"/> (see <see cref="IVideoDecoder.Software"/>).</summary>
+    bool CanDecodeInSoftware(in VideoFormat format) => false;
+
+    /// <summary>
+    /// Whether a hardware decoder takes <paramref name="format"/>: a stream given a software decoder from an earlier
+    /// stream's format moves to hardware when its own format is one of these.
+    /// </summary>
+    bool CanDecodeInHardware(in VideoFormat format) => CanDecode(format) && !CanDecodeInSoftware(format);
+
+    /// <summary>
+    /// A decoder for a stream whose format is known (from its first frame, or from the codec's earlier streams in this
+    /// session): the factory's choice among the decoders that take it, hardware first, or software only when
+    /// <paramref name="softwareOnly"/> (the hardware decoder failed this session's earlier stream). Null when none can.
+    /// </summary>
+    IVideoDecoder? Create(in VideoFormat format, int width, int height, bool softwareOnly) =>
+        !softwareOnly && CanDecode(format) ? Create(format.Codec, width, height) : null;
 }
 
 /// <summary>

@@ -74,5 +74,14 @@ int main(void) {
         for(int i=0;i<W*H;i++) CHECK(memcmp(pixels+i*4,decoded+i*4,3)==0);
     }
     puts("QUIC and LZ RGB32 round trips passed");
-    return lz4_tests();
+    if (lz4_tests()) return 1;
+    /* libavcodec is linked and refuses junk; pictures are checked by Spice.Native.Tests against tests/fixtures/h264. */
+    sc_h264 *v=sc_h264_open(2); CHECK(v);
+    sc_h264_picture info; uint8_t junk[64]; for (int i=0;i<64;i++) junk[i]=(uint8_t)(i*37+11);
+    int r=sc_h264_decode(v,junk,sizeof junk,&info); CHECK(r==SC_H264_INVALID || r==SC_H264_NONE);
+    CHECK(sc_h264_decode(v,junk,0,&info)==SC_H264_INVALID);
+    CHECK(sc_h264_convert(v,decoded,sizeof decoded,W*4,0)==-1);
+    sc_h264_close(v);
+    puts("H.264 open, junk and close checks passed");
+    return 0;
 }

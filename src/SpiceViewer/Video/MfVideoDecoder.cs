@@ -144,6 +144,9 @@ sealed unsafe class MfVideoDecoder : IVideoDecoder
 
     public bool HasDecoded => _pictureSeen;
 
+    /// <summary>The formats the probed DXVA profiles cover (<see cref="HardwareVideo.CanDecode"/>).</summary>
+    public bool Takes(in VideoFormat format) => _owner.CanDecode(format);
+
     public VideoDecodeResult Decode(ReadOnlySpan<byte> data, VideoOutput? output)
     {
         if (_failed || _mft is null) return VideoDecodeResult.Failed;

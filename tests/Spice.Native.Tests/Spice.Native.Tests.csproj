@@ -6,6 +6,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <Using Include="Xunit" />
     <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
+    <Compile Include="../Shared/H264Fixtures.cs" Link="Shared/H264Fixtures.cs" />
     <ProjectReference Include="../../src/Spice.Native/Spice.Native.csproj" />
     <ProjectReference Include="../../src/Spice.Media/Spice.Media.csproj" />
   </ItemGroup>

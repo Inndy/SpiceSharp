@@ -311,8 +311,9 @@ sealed unsafe class HardwareVideo : IVideoDecoderFactory
 
     /// <summary>
     /// The formats the probed DXVA profiles cover: H.264 up to High, 8-bit 4:2:0 (H264_VLD_NOFGT) and VP9 profile 0
-    /// (VP9_VLD_PROFILE0). spice-server's x264enc and vp9enc get 4:4:4 from its videoconvert unless the host sets
-    /// SPICE_CONVERTER_PREFERRED_FORMAT, and no hardware decoder takes that.
+    /// (VP9_VLD_PROFILE0). spice-server's x264enc and vp9enc get 4:4:4 from its videoconvert, and no hardware decoder
+    /// takes that; spice-server releases newer than 0.15.2 let the host pick 4:2:0 with SPICE_CONVERTER_PREFERRED_FORMAT,
+    /// which Proxmox's 0.15.2 ignores. Software decoding takes those streams (SoftwareVideo).
     /// </summary>
     public bool CanDecode(in VideoFormat format) => format.Codec switch
     {

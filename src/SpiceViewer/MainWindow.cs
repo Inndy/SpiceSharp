@@ -25,6 +25,7 @@ sealed unsafe partial class MainWindow
         IdPacingSpacing = 0x1C0, IdPacingClock = 0x1D0, IdPacingOff = 0x1E0,
         IdFastJpeg = 0x1F0, IdCompressionAuto = 0x200, IdCompressionLz4 = 0x210,
         IdCodecAuto = 0x220, IdCodecServer = 0x230, IdCodecMjpeg = 0x240, IdCodecH264 = 0x250, IdCodecVp9 = 0x260, IdCodecH265 = 0x270,
+        IdSoftwareVideo = 0x290,
         IdTrimPadding = 0x280;
     const int IdCloseButton = 1001;
 
@@ -553,6 +554,8 @@ sealed unsafe partial class MainWindow
         AppendItem(codec, IdCodecH264, "H.264");
         AppendItem(codec, IdCodecVp9, "VP9");
         AppendItem(codec, IdCodecH265, "HEVC");
+        AppendItem(codec, 0, null);
+        AppendItem(codec, IdSoftwareVideo, "Decode H.264 4:4:4 in software (more CPU, less bandwidth)");
 
         AppendItem(_sysMenu, 0, null);
         AppendItem(_sysMenu, IdCtrlAltDel, "Send Ctrl+Alt+Del");
@@ -615,8 +618,16 @@ sealed unsafe partial class MainWindow
         PInvoke.CheckMenuRadioItem(_codecMenu, IdCodecAuto, IdCodecH265, v, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
         // A codec without a hardware decoder here can't be chosen (until the probe answers, none can).
         var decodable = DecodableVideoCodecs();
-        foreach (var (id, codecType) in (ReadOnlySpan<(uint, VideoCodecType)>)[(IdCodecH264, VideoCodecType.H264), (IdCodecVp9, VideoCodecType.Vp9), (IdCodecH265, VideoCodecType.H265)])
+        foreach (var (id, codecType, name) in (ReadOnlySpan<(uint, VideoCodecType, string)>)[(IdCodecH264, VideoCodecType.H264, "H.264"), (IdCodecVp9, VideoCodecType.Vp9, "VP9"), (IdCodecH265, VideoCodecType.H265, "HEVC")])
+        {
+            // Each codec says how it is decoded here: in hardware, in software, or hardware with software for 4:4:4.
+            string text = VideoPath(codecType) is { } path ? $"{name} ({path})" : name;
+            fixed (char* t = text) PInvoke.ModifyMenu(_codecMenu, id, MENU_ITEM_FLAGS.MF_BYCOMMAND | MENU_ITEM_FLAGS.MF_STRING, id, t);
             PInvoke.EnableMenuItem(_codecMenu, id, MENU_ITEM_FLAGS.MF_BYCOMMAND | (decodable.Contains(codecType) ? MENU_ITEM_FLAGS.MF_ENABLED : MENU_ITEM_FLAGS.MF_GRAYED));
+        }
+        PInvoke.CheckMenuItem(_codecMenu, IdSoftwareVideo, (uint)(_softwareVideo ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
+        // Without libavcodec in spicecodec.dll (an older replacement build) there is no software path to turn on.
+        PInvoke.EnableMenuItem(_codecMenu, IdSoftwareVideo, MENU_ITEM_FLAGS.MF_BYCOMMAND | (SoftwareVideo.IsAvailable ? MENU_ITEM_FLAGS.MF_ENABLED : MENU_ITEM_FLAGS.MF_GRAYED));
     }
 
     public bool OnSysCommand(uint cmd)
@@ -654,6 +665,7 @@ sealed unsafe partial class MainWindow
             case IdCodecH264: SetVideoCodec(VideoCodecMode.H264); return true;
             case IdCodecVp9: SetVideoCodec(VideoCodecMode.Vp9); return true;
             case IdCodecH265: SetVideoCodec(VideoCodecMode.H265); return true;
+            case IdSoftwareVideo: SetSoftwareVideo(!_softwareVideo); return true;
             case IdAbout: ShowAbout(); return true;
         }
         return false;
@@ -673,10 +685,13 @@ sealed unsafe partial class MainWindow
         Dialogs.Info(_hwnd, "About SpiceViewer", $"SpiceViewer {typeof(MainWindow).Assembly.GetName().Version?.ToString(3)}",
             "A native Windows SPICE client for Proxmox .vv files. MIT License.\n\n" +
             "Includes libjpeg-turbo (IJG and BSD-3-Clause licenses), libopus (BSD-3-Clause), and SPICE QUIC/LZ/GLZ " +
-            "decoders from spice-common and spice-gtk (LGPL-2.1-or-later, in the replaceable spicecodec.dll). " +
+            "decoders from spice-common and spice-gtk and FFmpeg's H.264 decoder (LGPL-2.1-or-later, in the replaceable " +
+            "spicecodec.dll). " +
             "Architecture after SpiceSee (MIT).\n\n" +
             $"Renderer: {p?.AdapterName ?? "-"}{(p?.IsSoftware == true ? " (software)" : "")}\n" +
-            $"Video decoding: MJPEG (libjpeg-turbo){string.Concat(DecodableVideoCodecs().Select(c => $", {c} (hardware)"))}\n" +
+            $"Video decoding: MJPEG (libjpeg-turbo){string.Concat(DecodableVideoCodecs().Select(c => $", {c} ({VideoPath(c)})"))}" +
+            $"{(SoftwareVideo.IsAvailable ? "" : "; no software H.264 in this spicecodec.dll")}\n" +
+            $"Last video stream: {_session?.VideoDecoding ?? "none yet"}\n" +
             $"Session: {(_session?.AgentConnected == true ? "guest agent connected" : "no guest agent")}, " +
             $"mouse {(_session?.MouseMode == MouseMode.Client ? "client" : "server")} mode");
     }

@@ -1,6 +1,7 @@
 # 0037. H.264, VP9 and HEVC streams decode in hardware through Media Foundation; a codec is advertised only when decodable
 
-- Status: Accepted (the decoding device, the codec preference default and the sync-MFT-only choice are provisional)
+- Status: Accepted (the decoding device, the codec preference default and the sync-MFT-only choice are provisional);
+  amended 2026-10-31 (software H.264, at the end)
 - Date: 2026-10-31
 - Decided by: the human (2026-10-31: H.264 + VP9 + HEVC). The details below are by agent, marked provisional where
   the human should confirm them.
@@ -51,8 +52,11 @@
       (spice-streaming-agent in the guest), which this viewer doesn't open. Advertising CODEC_H265 on the display
       channel is harmless and ready for a server that adds it.
     - spice-server `server/gstreamer-encoder.c` 1043-1070 and 1142-1144: the pipeline is `appsrc ! videoconvert !
-      <encoder>`, and videoconvert picks the format closest to the BGRx input, so x264enc and vp9enc get Y444 unless
-      the host sets `SPICE_CONVERTER_PREFERRED_FORMAT` (for example `I420`) in QEMU's environment. The result is H.264
+      <encoder>`, and videoconvert picks the format closest to the BGRx input, so x264enc and vp9enc get Y444.
+      Upstream master lets the host choose another format with `SPICE_CONVERTER_PREFERRED_FORMAT` (for example `I420`)
+      in QEMU's environment, but only spice-server releases newer than 0.15.2 have it: Proxmox's 0.15.2 ignores it
+      (the human, 2026-10-31: the library doesn't contain the name, and a VM started with it set still sent profile
+      244), so stock Proxmox can't be switched to 4:2:0 that way. The result is H.264
       High 4:4:4 Predictive (profile 244) and, by the same pipeline, presumably VP9 profile 1 (not observed). Neither
       is covered by the DXVA profiles this viewer probes (`H264_VLD_NOFGT`, `VP9_VLD_PROFILE0`). The live check
       ([2026-10-31-hardware-video](../verification/2026-10-31-hardware-video.md)) found exactly that: the test host's
@@ -181,3 +185,67 @@
   one more device while streams decode and keeps the presenter single-threaded; reporting failures the way spice-gtk
   does keeps the screen right when a decoder can't, and avoiding the codec afterwards keeps a server whose encoder
   output no hardware decoder takes (the stock spice-server) on MJPEG instead of images.
+
+## Amendment (2026-10-31): H.264 the hardware refuses decodes in software
+
+- Decided by: the human, 2026-10-31. They prefer 4:4:4 because the picture isn't blurry ("VNC/RDP 我覺得 4:4:4
+  比較好，畫面不會模糊") and approved the spec change: "「4:4:4 允許軟體解碼」approved". The details below are by agent;
+  those marked provisional are for the human to confirm.
+- **Context:** stock Proxmox can't be switched to 4:2:0: its spice-server 0.15.2 has no
+  `SPICE_CONVERTER_PREFERRED_FORMAT` (see above), so its H.264 is always High 4:4:4 Predictive, which no GPU decoder and
+  no Media Foundation decoder takes. Until now that meant MJPEG for the session.
+- **Decision:**
+  - **Advertising:** H.264 is advertised when the hardware or the software path decodes it. The software path exists
+    when spicecodec.dll exports the `sc_h264_*` functions and the `softwareVideo` setting is on. VP9 and HEVC stay
+    hardware only. Without Media Foundation or a hardware adapter (Windows N, Server, WARP), H.264 is still advertised
+    through software.
+  - **Software decoder:** FFmpeg 9.0.2's libavcodec H.264 decoder with the libavutil it needs, configured LGPL-only
+    (no `--enable-gpl` or `--enable-nonfree`, nothing but the H.264 decoder and parser) and linked statically into
+    spicecodec.dll, so all LGPL code stays in that one replaceable DLL. The tarball is pinned by SHA-256 in
+    `native/fetch.sh` after its signature was checked (native/VENDORED.md), and the release zip ships it as the
+    library's corresponding source (provisional: 12 MB in every zip; a separate release asset would also satisfy
+    LGPL-2.1 section 6). A small C API in `h264_bridge.c` (`sc_h264_open/decode/convert/close`, optional exports, the
+    interface version stays 2): an older DLL means no software path, nothing else.
+  - **Routing, per stream:** a stream starts with the factory's decoder for its codec (hardware first, as before). Its
+    first frame's SPS (`VideoBitstream`) decides: the router (`VideoDecoderRouter`) can decode the format when the
+    hardware decoder takes it (8-bit 4:2:0 Baseline, Main, High) or the software one does (8-bit H.264 of the profiles
+    libavcodec decodes fully: Baseline, Main, Extended, High, High 10, High 4:2:2, High 4:4:4 Predictive, CAVLC 4:4:4
+    Intra; any chroma format). When the stream's decoder doesn't take it (`IVideoDecoder.Takes`), the session swaps in
+    the other path's decoder before the frame decodes, under the stream lock (a software decoder opens in about
+    0.4 ms with 4 threads). The session remembers each codec's last declared format, so later streams start on the
+    right path. MJPEG is unchanged.
+  - **Avoiding a codec only when neither path can:** a format neither path takes (10-bit, or 4:4:4 with software off)
+    avoids the codec for the session as before. A hardware decoder that fails before its first picture on a format the
+    software path takes hands the codec to software for the rest of the session instead (that stream still goes to
+    images); a software decoder failing so avoids the codec. A stream whose known format no path takes any more (the
+    setting turned off mid-session) avoids the codec at creation.
+  - **Software decoding (`SoftwareH264VideoDecoder`):** every frame decoded in order (`NeedsEveryFrame`), hidden and
+    late ones without conversion. Slice threads, min(4, logical processors) (provisional): x264enc in spice-server
+    uses sliced threads, and frame threads would hold each picture back by threads - 1 frames, so the last frame of an
+    update would wait for the next. `AV_CODEC_FLAG_LOW_DELAY`. Idle workers wait on a condition variable (measured: 0
+    cycles while idle), and they end with the stream's decoder. The newest picture is converted to opaque BGRA in
+    native code (Q14 fixed point, the picture's matrix and range, unspecified as BT.709 from 720 lines and BT.601
+    below as the hardware path assumes; vectorized by clang, AVX2 on x64) straight into the stream's frame buffer at
+    the picture's own size, rows reversed for a bottom-up stream. The canvas scales it to the destination as it does
+    MJPEG frames (bilinear), so there is no second scaler. 4:2:0 and 4:2:2 chroma is taken from the nearest sample
+    (provisional; only reached when no hardware decoder exists). Damaged data drops a frame once pictures have been
+    shown; 30 frames without any picture, a picture in a format the conversion doesn't take (a deeper bit depth
+    appearing mid-stream) or a libavcodec failure fail the stream. No managed allocation per frame.
+  - **Setting `softwareVideo`** (global, settings.json, on by default per the human's preference): off spends
+    bandwidth (MJPEG) instead of CPU. New streams follow at once; advertising follows from the next connection.
+  - **UI:** the "Video codec" menu labels each codec with its path ("H.264 (hardware; 4:4:4 in software)", "(software)",
+    "(hardware)") and adds "Decode H.264 4:4:4 in software", grayed without the exports. About lists each codec's path
+    and the last stream's format and path (`SpiceSession.VideoDecoding`).
+  - **Native build:** FFmpeg's own configure and make run inside `native/build.sh` (the only downloaded scripts run);
+    x86 assembly with NASM, AArch64 NEON with clang, the flags of decision 0026 and 0027 (full LTO, sections, CFG,
+    x86-64-v3). spicecodec.dll also imports `bcrypt.dll` (libavutil's random seed). An MSYS2 build needs its `make`
+    package; the Linux cross-build is unchanged otherwise.
+- **Measured** (dev machine, provisional; [2026-10-31-h264-444-software](../verification/2026-10-31-h264-444-software.md)):
+  spicecodec.dll grows from 150 KB to 2.6 MB (x64) and from 120 KB to 2.0 MB (arm64); a clean `build.sh x64` from 12 s to
+  61 s on 8 cores. 4:4:4 H.264 decoded and converted with 4 threads takes 1.8-2.5 ms of CPU per 1080p desktop-like
+  frame and 3.5-3.8 ms per detailed one, against 1.7-1.8 and 2.6-2.7 ms for libjpeg-turbo MJPEG of the same picture
+  (1.4-1.5 and 2.4 ms against 1.3 and 2.0 ms at 1600x900).
+- **Reason:** the human wants 4:4:4's sharpness, and stock Proxmox sends nothing else. libavcodec is the reference
+  decoder for these profiles, LGPL when configured so, and fits the existing rule that LGPL code lives in the
+  replaceable spicecodec.dll. Routing on the declared format keeps 4:2:0 on the GPU and costs nothing for servers that
+  send it. The cost is the DLL's size, a longer native build, and CPU on the client about that of MJPEG.

@@ -17,8 +17,11 @@ Every vendored file carries its upstream license header. Modified LGPL files als
 notice (LGPL-2.1 section 2b). [../native/VENDORED.md](../native/VENDORED.md) records each file's origin, revision
 and changes. The LGPL text is [../native/LICENSE.LGPL-2.1](../native/LICENSE.LGPL-2.1).
 
-libjpeg-turbo, libopus and lz4 are not in the repository: `native/fetch.sh` downloads pinned releases (checked by
-SHA-256) into `native/downloads/`, and their license files come from there. Only lz4's `lib/lz4.c` is built.
+libjpeg-turbo, libopus, lz4 and FFmpeg are not in the repository: `native/fetch.sh` downloads pinned releases (checked
+by SHA-256) into `native/downloads/`, and their license files come from there. Only lz4's `lib/lz4.c` is built. Of
+FFmpeg, only libavcodec's H.264 decoder and the libavutil it needs are built, configured without `--enable-gpl` or
+`--enable-nonfree` (LGPL-2.1-or-later), and linked statically into `spicecodec.dll`, so every LGPL part of the
+package stays in that one replaceable DLL.
 
 ## In the release package
 
@@ -39,6 +42,7 @@ committed file under `native/` as `source\native`, the complete source and build
 | libjpeg-turbo | turbojpeg.dll | IJG, BSD-3-Clause, zlib | `LICENSE.md` and `README.ijg` from the pinned download |
 | libopus | opus.dll | BSD-3-Clause, patent licenses | `COPYING` from the pinned download |
 | lz4 (block decoder, `lib/lz4.c`) | spicecodec.dll | BSD-2-Clause | `lib/LICENSE` from the pinned download |
+| FFmpeg 9.0.2 (libavcodec H.264 decoder, libavutil; unmodified, LGPL configuration) | spicecodec.dll | LGPL-2.1-or-later | `LICENSE.md` and `COPYING.LGPLv2.1` from the pinned download |
 | MinGW-w64 runtime (static) | all three DLLs | ZPL-2.1 and others | `mingw-w64-runtime.txt` |
 | LLVM compiler-rt builtins (static) | all three DLLs | Apache-2.0 WITH LLVM-exception | `llvm-compiler-rt.txt` |
 | Windows App SDK 2.5.1 components (WinUI 2.3.9, Foundation 2.3.12, InteractiveExperiences 2.1.9, Base 2.0.4; self-contained) | `PveLauncher\` except the exe and WebView2 files | Microsoft Software License Terms (distributable code) and third-party notices | `license.txt` and `NOTICE.txt` of `Microsoft.WindowsAppSDK.WinUI`, `NOTICE.txt` of `Microsoft.WindowsAppSDK.Base`, from NuGet |

@@ -31,7 +31,9 @@ for name in ('spicecodec', 'turbojpeg', 'opus'):
     dll = out / (name + '.dll')
     pe = subprocess.check_output(['llvm-objdump', '-p', str(dll)], text=True)
     imports = re.findall(r'DLL Name: (\S+)', pe)
-    assert imports and all(x.lower() == 'kernel32.dll' or x.lower().startswith('api-ms-win-crt-') for x in imports), imports
+    # libavutil's random seed (BCryptGenRandom) stays linked into spicecodec.dll; bcrypt.dll is part of Windows.
+    system = {'kernel32.dll', 'bcrypt.dll'} if name == 'spicecodec' else {'kernel32.dll'}
+    assert imports and all(x.lower() in system or x.lower().startswith('api-ms-win-crt-') for x in imports), imports
     for flag in ('DYNAMIC_BASE', 'HIGH_ENTROPY_VA', 'NX_COMPAT', 'GUARD_CF'):
         assert flag in pe, (dll, flag)
     cfg = subprocess.check_output(['llvm-readobj', '--coff-load-config', str(dll)], text=True)

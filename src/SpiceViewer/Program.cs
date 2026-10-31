@@ -9,8 +9,13 @@ static class Program
 {
     /// <summary>Time since Main started (field initializers may run lazily, so it is started explicitly).</summary>
     public static readonly Stopwatch Uptime = new();
-    /// <summary>The hardware video decoders, probed from start-up; null outside a viewing session.</summary>
-    public static Video.HardwareVideo? Video { get; private set; }
+    /// <summary>
+    /// The video decoders: hardware (probed from start-up) and software (libavcodec, for what the hardware refuses);
+    /// null outside a viewing session.
+    /// </summary>
+    public static Spice.Session.VideoDecoderRouter? Video { get; private set; }
+    /// <summary>The hardware path of <see cref="Video"/>.</summary>
+    public static Video.HardwareVideo? HardwareVideo { get; private set; }
 
     [STAThread]
     static int Main(string[] args)
@@ -63,8 +68,10 @@ static class Program
         Log.Info($"open {vv}");
         if (vv.IgnoredKeys.Count > 0) Log.Debug($"vv: ignored keys {string.Join(", ", vv.IgnoredKeys)}");
 
-        // Hardware video decoders are probed in the background while the channels link (docs/decisions/0037).
-        Video = new Video.HardwareVideo();
+        // Hardware video decoders are probed in the background while the channels link (docs/decisions/0037); software
+        // H.264 takes the streams they refuse. The softwareVideo setting is applied before the probe answers.
+        HardwareVideo = new Video.HardwareVideo();
+        Video = new Spice.Session.VideoDecoderRouter(HardwareVideo, new Spice.Session.SoftwareVideo());
         var window = new MainWindow(vv);
         // Connect before any other UI work: the ticket expires quickly.
         window.StartSession();

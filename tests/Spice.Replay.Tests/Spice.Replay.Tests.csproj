@@ -16,6 +16,7 @@
     <!-- The test LZ4 encoder and the attributes that skip native LZ4 tests on a spicecodec.dll without sc_lz4_decode. -->
     <Compile Include="../Spice.Native.Tests/Lz4TestEncoder.cs" Link="Shared/Lz4TestEncoder.cs" />
     <Compile Include="../Shared/AllocationWindow.cs" Link="Shared/AllocationWindow.cs" />
+    <Compile Include="../Shared/H264Fixtures.cs" Link="Shared/H264Fixtures.cs" />
     <!-- Exercise the renderer's lifecycle with test-only fake COM types; no viewer project or real device is used. -->
     <Compile Include="../../src/SpiceViewer/Audio/AudioOutput.cs" Link="Audio/AudioOutputUnderTest.cs" />
     <Compile Include="../../src/SpiceViewer/Audio/DeviceNotifications.cs" Link="Audio/DeviceNotificationsUnderTest.cs" />

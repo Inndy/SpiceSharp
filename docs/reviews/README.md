@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-10-31-h264-software.md](2026-10-31-h264-software.md) | Software H.264 native safety, SPS routing and hardware/software handoff, energy/allocation, FFmpeg licensing/packaging, and window-free regressions |
 | [2026-10-31-windows-terminal.md](2026-10-31-windows-terminal.md) | Decision 0042 Windows Terminal detection, PATH alias identity, reparse validation, settings/Auto hand-offs, Python CLI/command construction, and offline regressions |
 | [2026-10-31-monitor-inference.md](2026-10-31-monitor-inference.md) | L16 Linux monitor inference: draw/clip containment, video withdrawal, candidate lifetime, kept fallback identity, agent gate, settings/threading, and window-free regressions |
 | [2026-10-31-launcher-smoke-fixes.md](2026-10-31-launcher-smoke-fixes.md) | Launcher B1-B6 fixes: sign-in cleanup, per-sign-in version cache, exception redaction/recovery, AOT patterns, energy, and loopback regressions |

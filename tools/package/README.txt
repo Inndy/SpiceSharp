@@ -86,23 +86,30 @@ Image compression (window menu, saved for all VMs):
                               takes effect from the next connection.
 
 Video codec (window menu, saved for all VMs): which codec the server should use for video.
-  Guest video arrives as MJPEG, decoded on the CPU, or as H.264, VP9 or HEVC, decoded by the
-  graphics card. A codec is offered only if this PC's graphics card and Windows can decode it
-  in hardware; the others are grayed out. VP9 and HEVC usually need Microsoft's "VP9 Video
-  Extensions" and "HEVC Video Extensions" from the Microsoft Store. About lists what this PC
-  decodes. Windows N editions without the Media Feature Pack use MJPEG only.
-  Automatic (default)  asks for H.264, then VP9, then HEVC, whichever this PC decodes in
-                       hardware: much less bandwidth than MJPEG, but more CPU on the server.
-                       Without hardware decoding it asks for nothing.
+  Guest video arrives as MJPEG, decoded on the CPU, or as H.264, VP9 or HEVC. VP9 and HEVC are
+  decoded by the graphics card; H.264 by the graphics card when it can, else on the CPU (see
+  below). Each codec in the menu says how this PC decodes it; codecs it can't decode are grayed
+  out. VP9 and HEVC usually need Microsoft's "VP9 Video Extensions" and "HEVC Video Extensions"
+  from the Microsoft Store. About lists what this PC decodes and how the last video stream was
+  decoded. Windows N editions without the Media Feature Pack decode MJPEG, and H.264 on the CPU.
+  Automatic (default)  asks for H.264, then VP9, then HEVC, whichever this PC decodes: much
+                       less bandwidth than MJPEG, but more CPU on the server.
+                       Without any of them it asks for nothing.
   Server default       asks for nothing; the server then usually uses MJPEG.
   MJPEG                asks for MJPEG.
   H.264, VP9, HEVC     asks for that codec first. SPICE servers send HEVC only through
                        spice-streaming-agent, which this viewer doesn't use.
-  An unmodified SPICE server (Proxmox's included) encodes H.264, and likely VP9, in a
-  full-colour (4:4:4) format that the hardware decoders used here can't take. The viewer sees this
-  on the first stream and
-  asks for MJPEG for the rest of the connection (viewer.log says so). The host administrator can
-  set SPICE_CONVERTER_PREFERRED_FORMAT=I420 in the VM's QEMU environment to get 4:2:0 instead.
+  Decode H.264 4:4:4 in software (on by default): an unmodified SPICE server (Proxmox's
+  included) encodes H.264 in a full-colour (4:4:4) format that graphics cards can't decode.
+  It is sharp (text and thin lines keep their colour), and the viewer decodes it on the CPU
+  with FFmpeg's H.264 decoder, using up to four threads; H.264 the graphics card takes stays
+  on the graphics card. On this program's test machine 1080p 4:4:4 H.264 took about as much
+  CPU per frame as MJPEG of the same picture. Turn it off to spend bandwidth (MJPEG) instead of
+  CPU: new video streams follow at once, and the codecs offered to the server change from the
+  next connection. With it off, the viewer sees 4:4:4 on the first stream and asks for MJPEG
+  for the rest of the connection (viewer.log says so). The host's spice-server could encode
+  4:2:0 instead with SPICE_CONVERTER_PREFERRED_FORMAT=I420 in the VM's QEMU environment, but
+  only in spice-server releases newer than 0.15.2; Proxmox's 0.15.2 ignores it.
   A change is sent at once if the server supports it and applies to the next video stream;
   going back to "Server default" takes effect from the next connection. Video streams are sent
   only when video streaming is enabled in the VM's SPICE settings.
@@ -176,9 +183,10 @@ The system trust store and hostname checks are never used as a fallback.
 Files
 -----
   SpiceViewer.exe            the viewer (MIT)
-  spicecodec.dll             SPICE QUIC/LZ/GLZ decoders (LGPL-2.1-or-later) and the LZ4 decoder
-                             (BSD-2-Clause). You may replace it with your own build; its full source and
-                             build scripts are in source\native.
+  spicecodec.dll             SPICE QUIC/LZ/GLZ decoders and FFmpeg's H.264 decoder (libavcodec and
+                             libavutil; LGPL-2.1-or-later), and the LZ4 decoder (BSD-2-Clause). You may
+                             replace it with your own build; its full source and build scripts are in
+                             source\native (FFmpeg's pinned source tarball is downloaded by fetch.sh).
   turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
   opus.dll                   libopus (BSD-3-Clause)
   PveTerm.exe                Proxmox text consoles in your terminal, started by the launcher (MIT)

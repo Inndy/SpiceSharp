@@ -39,6 +39,10 @@ public sealed partial class SpiceSession
         public bool Pictured;
         /// <summary>Frames left to look for the declared format in (<see cref="CheckVideoFormat"/>); 0 once known.</summary>
         public int FormatChecks = MaxFormatChecks;
+        /// <summary>The format the stream's frames declare, once read.</summary>
+        public VideoFormat? Format;
+        /// <summary>STREAM_CREATE's encoded size (0 when implausible), the size hint for a replacement decoder.</summary>
+        public int StreamWidth, StreamHeight;
         // stream report bookkeeping: Frames and Drops count the frames that arrived in the current report window and
         // those of them dropped, whenever the drop happens (a queued frame can be dropped after its window was sent)
         public uint UniqueId, MaxWindow, Frames, Drops, StartMm, LastMm, Window;
@@ -316,6 +320,7 @@ public sealed partial class SpiceSession
                         {
                             Id = sc.Id, SurfaceId = sc.SurfaceId, Codec = sc.Codec, TopDown = (sc.Flags & StreamCreate.FlagTopDown) != 0,
                             Dest = sc.Dest, Clip = CopyClip(sc.Clip), Decoder = decoder, Unsupported = unsupported,
+                            StreamWidth = HintSide(sc.StreamWidth), StreamHeight = HintSide(sc.StreamHeight),
                         };
                     }
                     catch { decoder?.Dispose(); throw; }
@@ -419,14 +424,37 @@ public sealed partial class SpiceSession
         catch (Exception e) { Log.Error($"display: stream {id} decoder: {e.Message}"); }
     }
 
-    /// <summary>A decoder for a new non-MJPEG stream, if its codec was advertised and the app's factory can make one now.</summary>
+    /// <summary>The encoded size is a hint for the decoder (the bitstream carries the real one); an implausible one is left out.</summary>
+    static int HintSide(uint side) => side <= Surface.MaxSide ? (int)side : 0;
+
+    /// <summary>
+    /// A decoder for a new non-MJPEG stream, if its codec was advertised and the app's factory can make one now. When an
+    /// earlier stream of the codec declared its format, the factory picks the path for that format (hardware, or
+    /// software for what the hardware refuses), so the stream needn't change decoders on its first frame.
+    /// </summary>
     IVideoDecoder? CreateDecoder(in StreamCreate sc)
     {
         if (VideoDecoders is not { } factory || Array.IndexOf(Volatile.Read(ref _videoCodecs), sc.Codec) < 0) return null;
         if (IsAvoided(sc.Codec)) return null; // logged when it was avoided
-        // The encoded size is a hint for the decoder (the bitstream carries the real one); an implausible one is left out.
-        int w = sc.StreamWidth <= Surface.MaxSide ? (int)sc.StreamWidth : 0, h = sc.StreamHeight <= Surface.MaxSide ? (int)sc.StreamHeight : 0;
-        try { return factory.Create(sc.Codec, w, h); }
+        int w = HintSide(sc.StreamWidth), h = HintSide(sc.StreamHeight);
+        VideoFormat? known;
+        bool softwareOnly;
+        lock (_streamLock)
+        {
+            known = _knownFormats[(int)sc.Codec];
+            softwareOnly = SoftwareOnly(sc.Codec);
+        }
+        try
+        {
+            if (known is not { } format) return factory.Create(sc.Codec, w, h);
+            // The setting may have turned software decoding off since: then no path takes this server's format.
+            if (!factory.CanDecode(format) || (softwareOnly && !factory.CanDecodeInSoftware(format)))
+            {
+                AvoidVideoCodec(sc.Codec, $"the server encodes it as {format}, which can't be decoded here now");
+                return null;
+            }
+            return factory.Create(format, w, h, softwareOnly);
+        }
         catch (Exception e)
         {
             Log.Error($"display: stream {sc.Id}: no {sc.Codec} decoder: {e.Message}");
@@ -456,13 +484,34 @@ public sealed partial class SpiceSession
     /// Under _streamLock: the stream's decoder failed. Its queue and picture go, the server is told (it then sends the
     /// area as images), and the frames still arriving for it are ignored.
     /// </summary>
+    void FailStream(VideoStream s, ReadOnlySpan<byte> data)
+    {
+        // The format search may have ended before an SPS came (review H264-R2): the failing frame may declare it, which
+        // decides whether software can take the codec's later streams. Read only on failure.
+        if (s.Format is null && !s.Unsupported && VideoBitstream.TryReadFormat(s.Codec, data, out var declared))
+        {
+            s.Format = declared;
+            _knownFormats[(int)s.Codec] = declared;
+        }
+        FailStream(s);
+    }
+
     void FailStream(VideoStream s)
     {
         if (s.Unsupported) return;
         // A decoder that never made a picture likely can't take what this server sends (a profile the format check
         // doesn't know): the next streams of the codec would fail the same way.
-        if (!s.Pictured && s.Decoder is { HasDecoded: false } && s.Codec != VideoCodecType.Mjpeg)
-            AvoidVideoCodec(s.Codec, $"stream {s.Id} failed before its first picture");
+        if (!s.Pictured && s.Decoder is { HasDecoded: false } failed && s.Codec != VideoCodecType.Mjpeg)
+        {
+            // A hardware decoder that fails where a software one would take the format: the codec's later streams
+            // decode in software instead of avoiding the codec (docs/decisions/0037, amended 2026-10-31).
+            if (!failed.Software && s.Format is { } f && VideoDecoders?.CanDecodeInSoftware(f) == true)
+            {
+                _softwareOnlyCodecs |= 1 << (int)s.Codec;
+                Log.Warn($"display: stream {s.Id}: the hardware {s.Codec} decoder failed before its first picture; later {s.Codec} streams decode in software");
+            }
+            else AvoidVideoCodec(s.Codec, $"stream {s.Id} failed before its first picture");
+        }
         s.Unsupported = true;
         s.Reporting = false;
         DiscardQueue(s);
@@ -490,16 +539,60 @@ public sealed partial class SpiceSession
             return true;
         }
         s.FormatChecks = 0;
-        if (VideoDecoders?.CanDecode(format) != false)
+        s.Format = format;
+        _knownFormats[(int)s.Codec] = format;
+        if (VideoDecoders is not { } factory || s.Decoder is not { } decoder) return true;
+        if (factory.CanDecode(format))
         {
-            Log.Info($"display: stream {s.Id} is {format}");
-            return true;
+            bool softwareOnly = SoftwareOnly(s.Codec);
+            // A software decoder made from an earlier stream's format (a hint) gives way to hardware when this stream's
+            // format turns out to be one the hardware takes (review H264-R1).
+            bool keep = decoder.Software ? softwareOnly || !factory.CanDecodeInHardware(format) : !softwareOnly;
+            if (decoder.Takes(format) && keep)
+            {
+                NoteDecoder(s.Id, format, decoder);
+                return true;
+            }
+            // The other path takes it (hardware for 4:2:0, software for 4:4:4): swap decoders before this frame decodes.
+            IVideoDecoder? replacement = null;
+            try { replacement = factory.Create(format, s.StreamWidth, s.StreamHeight, softwareOnly); }
+            catch (Exception e) { Log.Error($"display: stream {s.Id}: no {s.Codec} decoder for {format}: {e.Message}"); }
+            if (replacement is not null)
+            {
+                DisposeDecoderQuietly(s.Id, decoder);
+                s.Decoder = replacement;
+                NoteDecoder(s.Id, format, replacement);
+                return true;
+            }
         }
-        Log.Warn($"display: stream {s.Id} is {format}, which the hardware decoder can't decode");
+        Log.Warn($"display: stream {s.Id} is {format}, which can't be decoded here");
         AvoidVideoCodec(s.Codec, $"the server encodes it as {format}");
         FailStream(s);
         return false;
     }
+
+    /// <summary>Logs which path decodes the stream and remembers it for About.</summary>
+    void NoteDecoder(uint id, in VideoFormat format, IVideoDecoder decoder)
+    {
+        string path = decoder.Software ? "software" : "hardware";
+        Log.Info($"display: stream {id} is {format}; decoding in {path}");
+        Volatile.Write(ref _videoDecoding, $"{format}, {path}");
+    }
+
+    string? _videoDecoding;
+
+    /// <summary>
+    /// The newest non-MJPEG stream's declared format and the path decoding it ("..., hardware" or "..., software"), or
+    /// null before one; for About.
+    /// </summary>
+    public string? VideoDecoding => Volatile.Read(ref _videoDecoding);
+
+    /// <summary>Under _streamLock: the format each codec's last stream declared (indexed by VideoCodecType), for the next ones.</summary>
+    readonly VideoFormat?[] _knownFormats = new VideoFormat?[8];
+    /// <summary>Under _streamLock: bit per VideoCodecType whose hardware decoder failed before a picture; software only.</summary>
+    int _softwareOnlyCodecs;
+
+    bool SoftwareOnly(VideoCodecType codec) => (_softwareOnlyCodecs & 1 << (int)codec) != 0;
 
     int _avoidedCodecs; // bit per VideoCodecType
 
@@ -537,7 +630,7 @@ public sealed partial class SpiceSession
             Log.Error($"display: stream {s.Id} decoder: {e.Message}");
             r = VideoDecodeResult.Failed;
         }
-        if (r == VideoDecodeResult.Failed) FailStream(s);
+        if (r == VideoDecodeResult.Failed) FailStream(s, data);
     }
 
     /// <summary>
@@ -893,7 +986,7 @@ public sealed partial class SpiceSession
             case VideoDecodeResult.Picture: s.Pictured = true; break;
             case VideoDecodeResult.NoPicture: return;
             case VideoDecodeResult.Dropped: CountDrop(s, window); return;
-            default: FailStream(s); return;
+            default: FailStream(s, data); return;
         }
         // The stream's TOP_DOWN flag describes how the source surface was laid out; spice-gtk flips the pictures of
         // bottom-up streams, whatever their codec. The clip is the current one, as in spice-gtk: a STREAM_CLIP that

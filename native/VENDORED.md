@@ -275,3 +275,27 @@ LGPL-2.1-or-later).
   `sc_glz_window_trim(window)`. It is optional: the interface version stays 2, and the viewer treats a DLL without
   it as having nothing to trim. `difftest/review-regressions.c` checks the bytes freed, that the current image
   stays and that decoding continues.
+
+## FFmpeg H.264 decoder (2026-10-31)
+
+FFmpeg is not vendored. Like libjpeg-turbo, opus and lz4, it is a pinned download, built unmodified:
+
+| Project | Release | Tarball | SHA-256 | Licence |
+|---|---|---|---|---|
+| [FFmpeg](https://ffmpeg.org) | 9.0.2 (2026-09-18) | `https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz` | `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e` | LGPL-2.1-or-later as configured (`LICENSE.md`, `COPYING.LGPLv2.1`) |
+
+Verified on 2026-10-31: `gpg --verify ffmpeg-9.0.2.tar.xz.asc` reports a good signature by the FFmpeg release signing
+key, fingerprint `FCF9 86EA 15E6 E293 A564 4F10 B432 2F04 D676 58D8` (imported from `https://ffmpeg.org/ffmpeg-devel.asc`,
+the key ffmpeg.org's download page names; the same key has signed FFmpeg releases since 2011). The `.tar.gz` of the same
+release, also signed, extracts to an identical tree. The hash was then checked again on a second download, on Windows.
+
+`build.sh` configures it with only the H.264 decoder and parser, without `--enable-gpl` or `--enable-nonfree` (the
+configure line is in README.md), and builds `libavcodec.a` and `libavutil.a`, which spicecodec.dll links statically, so
+all LGPL code stays in that one replaceable DLL. `--gc-sections` drops what the H.264 decoder doesn't reach. No FFmpeg
+file is changed, so no `MODIFIED FILE` notice applies; the release zip ships the tarball itself.
+
+SpiceSharp additions (MIT, not vendored):
+
+- `spicecodec/h264_bridge.c`: the `sc_h264_*` functions (README.md, "ABI and binding decisions").
+- `spicecodec/include/spice_codec.h`: declares them and `sc_h264_picture`.
+- `test/smoke.c`: opens a decoder, checks junk and empty input and a conversion without a picture.

@@ -46,6 +46,7 @@ InsertMenuItem
 CheckMenuItem
 CheckMenuRadioItem
 EnableMenuItem
+ModifyMenu
 CreatePopupMenu
 TrackPopupMenu
 InvalidateRect

@@ -227,13 +227,14 @@ The official SPICE spec is outdated. Use the `spice-protocol` headers for wire l
 
 ## Video and audio
 
-v0 decodes MJPEG streams and Opus audio; hardware H.264, VP9 and HEVC come after v0.
+v0 decodes MJPEG streams and Opus audio; hardware H.264, VP9 and HEVC, and software H.264, come after v0.
 
 Proxmox sends video streams only when video streaming is enabled in the VM's SPICE settings, so many sessions never use this path.
 
 - **MJPEG (v0):** decode with libjpeg-turbo into the framebuffer at the stream's destination rectangle, clipped by its clip region, then report the rectangle as dirty.
 - **H.264, VP9 and HEVC (post-v0; the human, 2026-10-31):** Media Foundation hardware decoder on the presenter's D3D11 device; `ID3D11VideoProcessor` converts and scales. The first version copies frames into the framebuffer, so later draw commands that read those pixels stay correct. It currently decodes on its own device on the same adapter, pending the human ([decisions/0037](../decisions/0037-hardware-video-decoding-h264-vp9-hevc-through-media-foundation.md)). VP8 is not decoded.
-- **Codec advertising:** advertise H.264, VP9 and HEVC each only when the adapter is hardware, has a DXVA decoder profile for that codec, and Media Foundation has a Direct3D 11 decoder for it (VP9 and HEVC usually need Microsoft's Store video extensions). VP8 is never advertised. Windows "N" editions and Windows Server without Media Foundation get MJPEG only.
+- **H.264 in software (the human, 2026-10-31: "4:4:4 允許軟體解碼" approved):** H.264 streams no hardware decoder takes, above all the High 4:4:4 Predictive that Proxmox's spice-server sends by default, decode in software with FFmpeg's libavcodec, linked statically into the replaceable LGPL `spicecodec.dll`. Each stream's declared format (its SPS) picks the path: 8-bit 4:2:0 that the hardware decoder takes stays on it, the rest goes to software. Software decoding is a setting, on by default; off spends bandwidth (MJPEG) instead of CPU.
+- **Codec advertising:** advertise H.264 when the hardware or the software path decodes it (software: a `spicecodec.dll` with libavcodec and the setting on). Advertise VP9 and HEVC each only when the adapter is hardware, has a DXVA decoder profile for that codec, and Media Foundation has a Direct3D 11 decoder for it (VP9 and HEVC usually need Microsoft's Store video extensions). VP8 is never advertised. Windows "N" editions and Windows Server without Media Foundation get MJPEG and software H.264 only. A codec is avoided for the session only when neither path decodes the server's stream.
 - **Pacing:** display frames against the guest's multimedia clock, as SpiceSee does.
 - **Audio (v0):** decode Opus with libopus (also accept raw PCM) and play through WASAPI in shared, event-driven mode. Open the stream on playback start and close it on playback stop; an open stream wakes the CPU every few milliseconds.
 - **Not in v0:** microphone input, DirectComposition video overlays.
@@ -333,6 +334,7 @@ Release the app under MIT, with the LGPL codecs isolated in a DLL users can repl
 | This client | MIT | Matches SpiceSee and keeps porting simple |
 | Code ported from SpiceSee | MIT | Keep SpiceSee's copyright notice |
 | QUIC, LZ and GLZ decoders | LGPL-2.1-or-later | Separate DLL with source and notices, replaceable by users |
+| FFmpeg libavcodec H.264 decoder and libavutil | LGPL-2.1-or-later (configured without GPL or nonfree parts) | Linked statically into the same replaceable DLL; pinned source tarball, build scripts and notices ship with it |
 | libjpeg-turbo | BSD-style (IJG and BSD) | Notice in the About screen |
 | libopus | BSD | Notice in the About screen |
 

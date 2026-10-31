@@ -59,8 +59,9 @@ display: asked the server to send stream 45 as images
 
 So the server answers the preference with H.264 (its GStreamer plugins load), and the report makes it fall back to
 images as designed. The cause: spice-server's pipeline is `appsrc ! videoconvert ! x264enc`, and videoconvert picks
-Y444 for BGRx input unless `SPICE_CONVERTER_PREFERRED_FORMAT` is set (`server/gstreamer-encoder.c` 1043-1070,
-1142-1144). Images instead of MJPEG would have made the default worse than before, so build B adds a format check and
+Y444 for BGRx input (`server/gstreamer-encoder.c` 1043-1070, 1142-1144). Upstream master's
+`SPICE_CONVERTER_PREFERRED_FORMAT` would choose another format, but only spice-server releases newer than 0.15.2 have it;
+Proxmox's 0.15.2 ignores it (see the addendum below). Images instead of MJPEG would have made the default worse than before, so build B adds a format check and
 a fallback (decision 0037, "Declared format first" and "A codec that can't be decoded is avoided").
 
 ### Run B: build B, Automatic (default)
@@ -130,7 +131,8 @@ These are dev-machine numbers; re-measure in a clean environment.
 ## Not done
 
 - **Hardware H.264 pictures from a live server.** This needs a host whose spice-server encodes 4:2:0, for example
-  QEMU started with `SPICE_CONVERTER_PREFERRED_FORMAT=I420`. Changing the PVE node is the human's call.
+  QEMU started with `SPICE_CONVERTER_PREFERRED_FORMAT=I420`, which needs a spice-server newer than 0.15.2: Proxmox's
+  0.15.2 ignores it (addendum below). Changing the PVE node is the human's call.
 - **VP9:** this machine has no Media Foundation VP9 decoder, so VP9 wasn't advertised. From the cited pipeline, the
   server's VP9 is expected to be profile 1 (4:4:4) too; that wasn't observed.
 - **HEVC:** only reachable through spice-streaming-agent, which the viewer doesn't use.
@@ -148,3 +150,13 @@ These are dev-machine numbers; re-measure in a clean environment.
 - The scheduled task used to start the player was deleted after each start, and the player was closed.
 - No Proxmox setting was changed, and no VM was rebooted.
 - Every viewer was closed, and the `.vv` files are gone: the viewer deletes them as their `delete-this-file` key asks.
+
+## Addendum (2026-10-31): `SPICE_CONVERTER_PREFERRED_FORMAT` and Proxmox's spice-server
+
+The human checked the test host after this note was written. Its spice-server is Debian's `libspice-server1
+0.15.2-1+b1`. `grep -c SPICE_CONVERTER_PREFERRED_FORMAT` on `libspice-server.so.1` prints 0, so the library doesn't
+read that variable. A VM started with `SPICE_CONVERTER_PREFERRED_FORMAT=I420` in its environment (checked in
+`/proc/<pid>/environ`) still streamed H.264 High 4:4:4 Predictive (profile 244). The variable exists only in
+spice-server releases newer than 0.15.2 (upstream master has it), so stock Proxmox can't be switched to 4:2:0 this way.
+That leaves software decoding as the only way to get H.264 from stock Proxmox:
+[2026-10-31-h264-444-software](2026-10-31-h264-444-software.md).

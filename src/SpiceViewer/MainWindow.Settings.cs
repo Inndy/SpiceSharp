@@ -22,6 +22,7 @@ sealed unsafe partial class MainWindow
     bool _fastJpeg;
     ImageCompressionMode _imageCompression = ImageCompressionMode.Auto;
     VideoCodecMode _videoCodec = VideoCodecMode.Auto;
+    bool _softwareVideo = true;
     /// <summary>The window opened at a remembered rectangle, so the first frame doesn't resize or center it.</summary>
     bool _restoredPlacement;
     bool _restoreFullscreen;
@@ -43,6 +44,9 @@ sealed unsafe partial class MainWindow
         _fastJpeg = s.FastJpeg;
         _imageCompression = s.ImageCompression;
         _videoCodec = s.VideoCodec;
+        _softwareVideo = s.SoftwareVideo;
+        // Read by the session when it advertises its codecs, after the hardware probe (over 100 ms from start).
+        if (Program.Video is { } video) video.SoftwareEnabled = _softwareVideo;
         if (_session is { } session)
         {
             session.VideoPacing = SessionPacing(_videoPacing);
@@ -227,9 +231,29 @@ sealed unsafe partial class MainWindow
         SaveSetting(s => s.ImageCompression = mode);
     }
 
-    /// <summary>The codecs decoded in hardware here; empty until the probe has answered.</summary>
-    static IReadOnlyList<VideoCodecType> DecodableVideoCodecs() =>
-        Program.Video is { Codecs.IsCompletedSuccessfully: true } video ? video.Codecs.Result : [];
+    /// <summary>The codecs decoded here, in hardware or in software; empty until the hardware probe has answered.</summary>
+    static IReadOnlyList<VideoCodecType> DecodableVideoCodecs() => Program.Video?.KnownCodecs ?? [];
+
+    /// <summary>How a codec is decoded here, for the menu and About: "hardware", "software", both, or null.</summary>
+    static string? VideoPath(VideoCodecType codec)
+    {
+        if (Program.Video is not { KnownCodecs: not null } video) return null;
+        bool hw = video.HardwareCodecs.Contains(codec), sw = video.SoftwareCodecs.Contains(codec);
+        return hw && sw ? "hardware; 4:4:4 in software" : hw ? "hardware" : sw ? "software" : null;
+    }
+
+    /// <summary>
+    /// A menu change, saved for all VMs. New streams pick their decoder with it at once; the codecs advertised to the
+    /// server change from the next connection (capabilities are fixed for a session).
+    /// </summary>
+    void SetSoftwareVideo(bool on)
+    {
+        _softwareVideo = on;
+        if (Program.Video is { } video) video.SoftwareEnabled = on;
+        UpdateMenuChecks();
+        Log.Info($"video: software decoding {(on ? "on" : "off")} (advertising follows from the next connection)");
+        SaveSetting(s => s.SoftwareVideo = on);
+    }
 
     /// <summary>
     /// A menu change: sent to the running session's server at once (it then restarts its streams with the new order);
