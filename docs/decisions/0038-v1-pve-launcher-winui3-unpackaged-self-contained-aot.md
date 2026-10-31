@@ -57,7 +57,8 @@
       | win-x64 | 236 | 65.6 MB | 8.6 MB |
       | win-arm64 | 236 | 70.7 MB | 8.9 MB |
 
-      About 90 of the files are the Windows App SDK's per-language resource folders.
+      About 90 of the files are the Windows App SDK's per-language resource folders; the zip keeps only `en-US`
+      (open question 3).
   - **Zip layout** (`tools/package.ps1`, unless `-NoLauncher`):
     - `PveTerm.exe` beside `SpiceViewer.exe`;
     - `PveLauncher\` with `PveLauncher.exe` and everything the Windows App SDK needs, so the viewer's folder stays
@@ -172,8 +173,9 @@
      accept terms at least as protective as Microsoft's; `LICENSE.txt` says so, and it reserves rights the MIT parts
      don't. Ship it in the main zip, or as a separate launcher zip (`-NoLauncher` already gives the viewer-only one)?
   2. The `PveLauncher\` subfolder instead of the flat folder the task described: keep it?
-  3. Keep all ~90 Windows App SDK language folders (the built-in controls' own strings), or ship English only to save
-     space?
+  3. ~~Keep all ~90 Windows App SDK language folders, or ship English only?~~ Answered (human, 2026-10-31: "這版先只留英文"):
+     `tools/package.ps1` keeps only `en-US\*.mui`, which is also MUI's last fallback, so other display languages see
+     WinUI's built-in control strings in English. The launcher's own UI is English anyway.
   4. Should a stopped VM offer "Start", and should the status refresh live? Today both are manual, by design: no
      action changes guest state, and nothing polls.
   5. `--install` copies only the viewer. Should it also install the launcher, or should the launcher get its own

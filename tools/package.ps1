@@ -55,7 +55,11 @@ if ($withLauncher) {
     # The launcher finds SpiceViewer.exe and PveTerm.exe in its parent folder; its Windows App SDK files stay in
     # PveLauncher\ so the viewer's folder stays readable.
     $launcherStage = Join-Path $stage "PveLauncher"
-    foreach ($f in Get-ChildItem -Recurse -File $launcherPublish | Where-Object { $_.Extension -ne ".pdb" }) {
+    # WinUI's own strings ship as <lang>\*.dll.mui; only en-US is kept, which is also MUI's last fallback (human,
+    # 2026-10-31: "這版先只留英文").
+    $files = Get-ChildItem -Recurse -File $launcherPublish |
+        Where-Object { $_.Extension -ne ".pdb" -and ($_.Extension -ne ".mui" -or $_.Directory.Name -eq "en-US") }
+    foreach ($f in $files) {
         $dst = Join-Path $launcherStage $f.FullName.Substring($launcherPublish.Length + 1)
         New-Item -ItemType Directory -Force (Split-Path -Parent $dst) | Out-Null
         Copy-Item $f.FullName $dst
