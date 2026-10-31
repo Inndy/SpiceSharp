@@ -15,7 +15,7 @@ public sealed partial class ServerItem(PveServerConfig config)
             string where;
             try { where = PveClient.NormalizeApiUrl(Config.Url).Authority; }
             catch (PveApiException) { where = Config.Url; }
-            return $"{Config.Account} · {where}{(string.IsNullOrWhiteSpace(Config.CaPem) ? "" : " · pinned CA")}";
+            return $"{Config.Account} · {where}{(string.IsNullOrWhiteSpace(Config.CaPem) ? "" : " · pinned certificate")}";
         }
     }
 }

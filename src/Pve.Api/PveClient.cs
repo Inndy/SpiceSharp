@@ -274,12 +274,89 @@ public sealed class PveClient : IDisposable
     }
 
     /// <summary><c>GET /cluster/resources?type=vm</c>: VMs and containers the account may see, by VMID.</summary>
-    public async Task<IReadOnlyList<PveVm>> ListVmsAsync(CancellationToken ct = default)
+    /// <param name="log">False for the launcher's automatic refresh, so a refresh every few seconds doesn't fill the
+    /// log; errors still come back as exceptions.</param>
+    public async Task<IReadOnlyList<PveVm>> ListVmsAsync(CancellationToken ct = default, bool log = true)
     {
-        using var doc = await SendAsync(HttpMethod.Get, "/cluster/resources?type=vm", null, authenticated: true, ct).ConfigureAwait(false);
+        using var doc = await SendAsync(HttpMethod.Get, "/cluster/resources?type=vm", null, authenticated: true, ct, log).ConfigureAwait(false);
         var list = PveVm.ParseResources(Data(doc));
-        Log?.Invoke($"api: {list.Count} guests listed");
+        if (log) Log?.Invoke($"api: {list.Count} guests listed");
         return list;
+    }
+
+    /// <summary>
+    /// <c>POST /nodes/{node}/qemu/{vmid}/status/start</c>, or <c>.../lxc/{vmid}/status/start</c> for a container, with
+    /// no parameters: the web UI's Start (qemu-server API2/Qemu.pm <c>vm_start</c>, pve-container API2/LXC/Status.pm
+    /// <c>vm_start</c>; both need <c>VM.PowerMgmt</c> on <c>/vms/{vmid}</c>). The server answers at once with the
+    /// worker task's UPID (<c>qmstart</c>, <c>vzstart</c>, or <c>hastart</c> for an HA-managed guest); the start
+    /// itself runs in that task (<see cref="GetTaskStatusAsync"/>).
+    /// </summary>
+    public async Task<string> StartGuestAsync(PveVm vm, CancellationToken ct = default)
+    {
+        CheckTarget(vm.Node, vm.Vmid);
+        using var doc = await SendAsync(HttpMethod.Post, $"/nodes/{vm.Node}/{vm.TypeText}/{vm.Vmid}/status/start", [], authenticated: true, ct).ConfigureAwait(false);
+        var data = Data(doc);
+        string? upid = data.ValueKind == JsonValueKind.String ? data.GetString() : null;
+        if (upid is null || !PveTask.IsUpid(upid)) throw new PveApiException("The server's answer to Start has no task ID.");
+        // The UPID is the server's text: it goes into requests as it is, but into the log scrubbed (review R1).
+        Log?.Invoke($"api: start {vm.TypeText} {vm.Vmid} on {vm.Node}: task {Scrub(upid)}");
+        return upid;
+    }
+
+    /// <summary>
+    /// <c>GET /nodes/{node}/tasks/{upid}/status</c> (pve-manager API2/Tasks.pm <c>read_task_status</c>): any user may
+    /// read the tasks it started; others need <c>Sys.Audit</c> on the node.
+    /// </summary>
+    public async Task<PveTask> GetTaskStatusAsync(string node, string upid, CancellationToken ct = default)
+    {
+        if (!PveVm.IsSafeId(node)) throw new PveApiException("The node name is not valid.");
+        if (!PveTask.IsUpid(upid)) throw new PveApiException("The task ID is not valid.");
+        using var doc = await SendAsync(HttpMethod.Get, $"/nodes/{node}/tasks/{Uri.EscapeDataString(upid)}/status", null, authenticated: true, ct,
+            log: false).ConfigureAwait(false);
+        var t = PveTask.Parse(upid, Data(doc));
+        // exitstatus is the server's text and goes to the status bar and the log: scrubbed like an error (review R1).
+        return t.ExitStatus is { } exit ? t with { ExitStatus = Scrub(exit) } : t;
+    }
+
+    /// <summary>
+    /// Asks for the task's status every <paramref name="every"/> until it has stopped, or until
+    /// <paramref name="limit"/> has passed (then the last answer, still running). Used only right after the user
+    /// started something, so it is bounded; nothing polls on its own.
+    /// </summary>
+    public async Task<PveTask> WaitForTaskAsync(string node, string upid, TimeSpan every, TimeSpan limit, CancellationToken ct = default)
+    {
+        long start = _time.GetTimestamp();
+        while (true)
+        {
+            var t = await GetTaskStatusAsync(node, upid, ct).ConfigureAwait(false);
+            if (!t.Running || _time.GetElapsedTime(start) + every > limit) return t;
+            await Task.Delay(every, _time, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Whether this account (or token) has <paramref name="privilege"/> on <paramref name="aclPath"/>, by
+    /// <c>GET /access/permissions?path=...</c> (pve-access-control API2/AccessControl.pm <c>permissions</c>: anyone may
+    /// read their own). The server computes the path's effective privileges itself, the same way its permission check
+    /// does (RPCEnvironment <c>permissions</c>), so no ACL rules are copied here. Null when the answer can't be had.
+    /// </summary>
+    public async Task<bool?> HasPrivilegeAsync(string aclPath, string privilege, CancellationToken ct = default)
+    {
+        try
+        {
+            using var doc = await SendAsync(HttpMethod.Get, "/access/permissions?path=" + Uri.EscapeDataString(aclPath), null, authenticated: true, ct,
+                log: false).ConfigureAwait(false);
+            var data = Data(doc);
+            if (data.ValueKind != JsonValueKind.Object) return null;
+            // { "/vms/100": { "VM.PowerMgmt": 1, ... } }, or {} when the account has nothing there.
+            if (!data.TryGetProperty(aclPath, out var privs)) return false;
+            return privs.ValueKind == JsonValueKind.Object && privs.TryGetProperty(privilege, out _);
+        }
+        catch (PveApiException e) when (e is not PveAuthException)
+        {
+            Log?.Invoke($"api: privileges on {aclPath} not readable ({e.Message})");
+            return null;
+        }
     }
 
     /// <summary>
@@ -367,7 +444,8 @@ public sealed class PveClient : IDisposable
 
     // ---- HTTP ----------------------------------------------------------------------------------------------------
 
-    async Task<JsonDocument> SendAsync(HttpMethod method, string path, KeyValuePair<string, string>[]? form, bool authenticated, CancellationToken ct)
+    async Task<JsonDocument> SendAsync(HttpMethod method, string path, KeyValuePair<string, string>[]? form, bool authenticated, CancellationToken ct,
+        bool log = true)
     {
         if (authenticated)
         {
@@ -423,7 +501,9 @@ public sealed class PveClient : IDisposable
             // kept as the inner one, where a log of the whole chain would print it unredacted (review R1).
             catch (HttpRequestException e) { throw new PveApiException(Describe(e, secrets)); }
             string pathOnly = path.Split('?')[0];
-            Log?.Invoke($"api: {method} {pathOnly} -> {(int)res.StatusCode}");
+            // A failure is always logged; a success only when the caller asked for it (the automatic refresh doesn't).
+            // A path can carry the server's own text (a task's UPID), so it is scrubbed too (review R1).
+            if (log || res.StatusCode != HttpStatusCode.OK) Log?.Invoke($"api: {method} {Redact(pathOnly, secrets)} -> {(int)res.StatusCode}");
             bool ok = res.StatusCode == HttpStatusCode.OK;
             byte[] body;
             try { body = await ReadBodyAsync(res.Content, ok ? MaxResponseBytes : MaxErrorBytes, truncate: !ok, deadline.Token).ConfigureAwait(false); }
@@ -501,6 +581,27 @@ public sealed class PveClient : IDisposable
         catch (JsonException) { }
         text = Redact(text, secrets);
         return text.Length > 600 ? text[..600] + "..." : text;
+    }
+
+    /// <summary>
+    /// Text from the server (a UPID, a task's exit status) with this session's secrets replaced, for a message or the
+    /// log: a server or proxy may reflect what it received into an answer that is otherwise well formed (review R1).
+    /// </summary>
+    public string Scrub(string text)
+    {
+        var secrets = new List<string>(5);
+        if (_apiToken is { } token)
+        {
+            secrets.Add(token);
+            secrets.Add(token[(token.IndexOf('=') + 1)..]);
+        }
+        foreach (var t in new[] { _ticket, _pending })
+        {
+            if (t is null) continue;
+            secrets.Add(t.Value);
+            if (t.Csrf is { } csrf) secrets.Add(csrf);
+        }
+        return secrets.Count == 0 ? text : Redact(text, secrets);
     }
 
     /// <summary>Replaces each secret, as sent and in its URL- and form-encoded spellings, longest first, in any case.</summary>

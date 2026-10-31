@@ -14,7 +14,8 @@ namespace PveLauncher;
 /// <summary>
 /// The launcher window (docs/decisions/0038): saved servers on the left, the selected server's guests on the right.
 /// Everything that talks to Proxmox, Credential Manager or another process is in Pve.Api; this class only shows it.
-/// Nothing refreshes by itself: the list is fetched on sign-in and on Refresh (energy rules).
+/// The list is fetched on sign-in and on Refresh, and by itself every few seconds only while the window is shown
+/// (<see cref="RefreshScheduler"/>; energy rules).
 /// </summary>
 public sealed partial class MainWindow : Window, ISignInPrompt
 {
@@ -25,11 +26,29 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     readonly Dictionary<string, PveClient> _clients = [];
     readonly DispatcherQueue _ui;
     IReadOnlyList<PveVm> _guests = [];
-    bool _busy, _loading;
+    bool _busy, _loading, _closed;
+    readonly RefreshScheduler _autoRefresh;
+    /// <summary>The last automatic refresh's error, shown once until the server answers again.</summary>
+    string? _autoRefreshError;
+    /// <summary>Counts list requests, manual and automatic; only the latest one started may update the list, so an
+    /// older answer that arrives late never overwrites a newer one (review R3).</summary>
+    int _listGeneration;
+    const string AutoRefreshFailed = "Could not refresh the guests";
+
+    /// <summary>Whether the account may start a guest (<c>VM.PowerMgmt</c> on <c>/vms/VMID</c>), by server and VMID,
+    /// as the server answered; a guest missing here is unknown, and Start is offered.</summary>
+    readonly Dictionary<(string Server, int Vmid), bool> _canStart = [];
+    readonly HashSet<(string Server, int Vmid)> _askingCanStart = [];
+    /// <summary>Guests whose start task is being followed, so Start isn't offered twice.</summary>
+    readonly HashSet<(string Server, int Vmid)> _starting = [];
+    /// <summary>How long a start task is followed (qm start waits up to max(30 s, 1 s per GiB) for QEMU).</summary>
+    static readonly TimeSpan StartTaskLimit = TimeSpan.FromMinutes(2);
+    static readonly TimeSpan StartTaskPoll = TimeSpan.FromSeconds(1);
 
     /// <summary>The terminal selector's items, in order (MainWindow.xaml).</summary>
     static readonly TerminalHost[] TerminalChoices =
-        [TerminalHost.Auto, TerminalHost.WindowsTerminal, TerminalHost.WindowsTerminalPreview, TerminalHost.Default, TerminalHost.Conhost];
+        [TerminalHost.Auto, TerminalHost.WindowsTerminal, TerminalHost.WindowsTerminalPreview, TerminalHost.Mintty, TerminalHost.Default,
+         TerminalHost.Conhost, TerminalHost.Custom];
 
     /// <summary>The VNC viewer selector's items, in order (MainWindow.xaml, docs/decisions/0043).</summary>
     static readonly Pve.Term.VncViewerKind[] VncChoices =
@@ -55,6 +74,13 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         LauncherLog.Write($"start: home {_home}, settings in {_location.SettingsDir}{(_location.FellBack ? " (the portable folder can't be written)" : "")}");
         _settings = LauncherSettings.Load(_location.SettingsDir);
         if (_settings.LoadProblem is { } problem) LauncherLog.Write("settings: " + problem);
+        _autoRefresh = new RefreshScheduler(TimeSpan.FromSeconds(_settings.RefreshSeconds), AutoRefreshAsync, a => _ui.TryEnqueue(() => a()))
+        {
+            Error = e => ShowUnexpected("Could not refresh the guests", e),
+        };
+        LauncherLog.Write(_autoRefresh.Interval > TimeSpan.Zero
+            ? $"refresh: every {_autoRefresh.Interval.TotalSeconds:0} s while the window is shown"
+            : "refresh: automatic refresh is off (refreshSeconds 0)");
 
         _loading = true;
         ShowTerminalDetection(WindowsTerminalLocator.Scan());
@@ -64,8 +90,14 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         foreach (var s in _settings.Servers) Servers.Add(new ServerItem(s));
         _loading = false;
         SizeToDpi(1120, 700);
+        // Whether the window can be seen: shown and not minimized. Any of these may be the one that reports a change.
+        AppWindow.Changed += (_, _) => UpdateVisible();
+        Activated += (_, _) => UpdateVisible();
+        VisibilityChanged += (_, _) => UpdateVisible();
         Closed += (_, _) =>
         {
+            _closed = true;
+            _autoRefresh.Dispose();
             foreach (var c in _clients.Values) c.Dispose();
             LauncherLog.Write("exit");
         };
@@ -79,6 +111,13 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     [LibraryImport("user32.dll")]
     private static partial uint GetDpiForWindow(nint hwnd);
+
+    /// <summary>The automatic refresh runs only while the window is shown and not minimized (energy rules).</summary>
+    void UpdateVisible()
+    {
+        if (_closed) return;
+        _autoRefresh.Visible = AppWindow.IsVisible && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+    }
 
     void SizeToDpi(int width, int height)
     {
@@ -168,6 +207,17 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         TerminalButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
         VncButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && guest.Vm.Type == PveGuestType.Qemu && !_busy;
         ConsoleButton.Content = guest?.Vm.Type == PveGuestType.Lxc ? "Open terminal" : "Open console";
+        StartButton.Visibility = guest is not null && OffersStart(guest) ? Visibility.Visible : Visibility.Collapsed;
+        StartButton.IsEnabled = !_busy;
+    }
+
+    /// <summary>Start is offered for a stopped guest that isn't a template, isn't already being started, and that the
+    /// account may start, as far as the server has said.</summary>
+    bool OffersStart(GuestItem g)
+    {
+        if (g.Vm.IsTemplate || g.Vm.Status != "stopped" || SelectedServer is not { } server) return false;
+        var key = (server.Config.Id, g.Vm.Vmid);
+        return !_starting.Contains(key) && !(_canStart.TryGetValue(key, out bool may) && !may);
     }
 
     // ---- Running an API action ------------------------------------------------------------------------------------
@@ -183,6 +233,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     void DropClient(string serverId)
     {
         if (_clients.Remove(serverId, out var c)) c.Dispose();
+        // The next sign-in may be another account.
+        foreach (var key in _canStart.Keys.Where(k => k.Server == serverId).ToArray()) _canStart.Remove(key);
     }
 
     /// <summary>Runs <paramref name="action"/> signed in: signs in first if needed, and once more if the session
@@ -225,29 +277,89 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         return ok;
     }
 
-    async Task LoadGuestsAsync(PveClient client, PveServerConfig server)
+    async Task LoadGuestsAsync(PveClient client, PveServerConfig server, bool announce = true)
     {
         // A token's sign-in already fetched the version (smoke test B6); a password sign-in didn't.
         string version = client.ServerVersion ?? await client.GetVersionAsync();
+        int generation = ++_listGeneration;
         var guests = await client.ListVmsAsync();
-        if (SelectedServer?.Config.Id != server.Id) return;
+        if (SelectedServer?.Config.Id != server.Id || generation != _listGeneration) return;
         _guests = guests;
+        _autoRefreshError = null;
         SetHeading(server.DisplayName, $"PVE {version} · {client.SignedInAs}");
         ApplyFilter();
-        ShowInfo($"{_guests.Count} guests.", InfoBarSeverity.Informational);
+        if (announce) ShowInfo($"{_guests.Count} guests.", InfoBarSeverity.Informational);
+        _autoRefresh.Armed = true;
+        _autoRefresh.Fetched();
     }
 
+    /// <summary>
+    /// The automatic refresh: one <c>GET /cluster/resources?type=vm</c>, without the log lines of a manual one. It
+    /// never asks for a password: an ended session stops it until the next sign-in, and an error is shown once until
+    /// the server answers again. The list is touched only when something changed.
+    /// </summary>
+    async Task AutoRefreshAsync()
+    {
+        if (_busy || SelectedServer is not { } item || !_clients.TryGetValue(item.Config.Id, out var c) || !c.IsSignedIn) return;
+        IReadOnlyList<PveVm> guests;
+        int generation = ++_listGeneration;
+        try { guests = await c.ListVmsAsync(log: false); }
+        catch (PveAuthException e)
+        {
+            _autoRefresh.Armed = false;
+            LauncherLog.Write($"refresh: {e.Message}; the automatic refresh waits for the next sign-in");
+            if (SelectedServer?.Config.Id == item.Config.Id)
+                ShowInfo("The session ended. Refresh (F5) signs in again.", InfoBarSeverity.Warning);
+            return;
+        }
+        catch (PveApiException e)
+        {
+            if (e.Message == _autoRefreshError) return;
+            _autoRefreshError = e.Message;
+            ShowError(AutoRefreshFailed, e.Message);
+            return;
+        }
+        catch (ObjectDisposedException) { return; } // signed out meanwhile
+        if (SelectedServer?.Config.Id != item.Config.Id || _clients.GetValueOrDefault(item.Config.Id) != c) return;
+        // A manual Refresh started while this one ran answers for a later moment; this older answer is dropped
+        // (review R3).
+        if (generation != _listGeneration) return;
+        if (_autoRefreshError is not null)
+        {
+            _autoRefreshError = null;
+            LauncherLog.Write("refresh: the server answers again");
+            if (Notice.Title == AutoRefreshFailed) Notice.IsOpen = false;
+        }
+        if (guests.SequenceEqual(_guests)) return;
+        _guests = guests;
+        ApplyFilter();
+    }
+
+    /// <summary>
+    /// Brings the shown rows in line with <see cref="_guests"/> and the filter, in place: unchanged rows stay (with
+    /// their selection and the scroll position), changed ones are replaced, others inserted or removed. Both lists are
+    /// sorted by VMID.
+    /// </summary>
     void ApplyFilter()
     {
         string filter = Filter.Text.Trim();
-        var keep = SelectedGuest?.Vm;
-        Guests.Clear();
+        var selected = SelectedGuest?.Vm.Vmid;
+        int i = 0;
         foreach (var vm in _guests)
         {
             var g = new GuestItem(vm);
-            if (g.Matches(filter)) Guests.Add(g);
+            if (!g.Matches(filter)) continue;
+            while (i < Guests.Count && Guests[i].Vm.Vmid < vm.Vmid) Guests.RemoveAt(i);
+            if (i < Guests.Count && Guests[i].Vm.Vmid == vm.Vmid)
+            {
+                if (Guests[i].Vm != vm) Guests[i] = g;
+            }
+            else Guests.Insert(i, g);
+            i++;
         }
-        if (keep is not null && Guests.FirstOrDefault(g => g.Vm.Vmid == keep.Vmid) is { } again) VmList.SelectedItem = again;
+        while (Guests.Count > i) Guests.RemoveAt(Guests.Count - 1);
+        if (selected is int vmid && SelectedGuest?.Vm.Vmid != vmid && Guests.FirstOrDefault(g => g.Vm.Vmid == vmid) is { } again)
+            VmList.SelectedItem = again;
         UpdateButtons();
     }
 
@@ -259,6 +371,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     async Task ServerSelectedAsync()
     {
+        _autoRefresh.Armed = false;
         Guests.Clear();
         _guests = [];
         SetHeading(SelectedServer?.Name ?? "Guests");
@@ -344,6 +457,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     {
         if (_busy || SelectedServer is not { } item) return;
         DropClient(item.Config.Id);
+        _autoRefresh.Armed = false;
         Guests.Clear();
         _guests = [];
         SetHeading(item.Name);
@@ -410,7 +524,85 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     void OnFilterChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
-    void OnGuestSelected(object sender, SelectionChangedEventArgs e) => UpdateButtons();
+    void OnGuestSelected(object sender, SelectionChangedEventArgs e)
+    {
+        UpdateButtons();
+        if (SelectedGuest is { Vm: { IsTemplate: false, Status: "stopped" } } g) Guard("Could not check the Start privilege", () => LookUpStartPrivilegeAsync(g));
+    }
+
+    /// <summary>
+    /// Asks the server once per guest and session whether the account may start it (<c>GET /access/permissions</c>
+    /// for <c>/vms/VMID</c>), when a stopped guest is selected: a click, not a timer. Start stays offered until the
+    /// answer says no; an answer that can't be had leaves it offered, and the server decides when it is clicked.
+    /// </summary>
+    async Task LookUpStartPrivilegeAsync(GuestItem g)
+    {
+        if (SelectedServer is not { } item || !_clients.TryGetValue(item.Config.Id, out var c) || !c.IsSignedIn) return;
+        var key = (item.Config.Id, g.Vm.Vmid);
+        if (_canStart.ContainsKey(key) || !_askingCanStart.Add(key)) return;
+        try
+        {
+            bool? may;
+            try { may = await c.HasPrivilegeAsync($"/vms/{g.Vm.Vmid}", "VM.PowerMgmt"); }
+            catch (PveApiException) { may = null; } // an ended session: unknown until the next sign-in
+            catch (ObjectDisposedException) { return; } // signed out meanwhile
+            if (may is not bool known || _clients.GetValueOrDefault(item.Config.Id) != c) return;
+            _canStart[key] = known;
+            if (!known) LauncherLog.Write($"start: {c.SignedInAs} lacks VM.PowerMgmt on /vms/{g.Vm.Vmid}; Start is not offered");
+        }
+        finally { _askingCanStart.Remove(key); }
+        UpdateButtons();
+    }
+
+    void OnStart(object sender, RoutedEventArgs e) => Guard("Could not start the guest", async () =>
+    {
+        if (SelectedGuest is { } g) await StartGuestAsync(g);
+    });
+
+    /// <summary>
+    /// Starts a stopped guest (<c>POST .../status/start</c>) and follows its task until it ends, at most
+    /// <see cref="StartTaskLimit"/>: a failed start shows the task's error. The window stays usable meanwhile.
+    /// </summary>
+    async Task StartGuestAsync(GuestItem g)
+    {
+        if (SelectedServer is not { } item || !OffersStart(g)) return;
+        var vm = g.Vm;
+        string label = g.Label;
+        var key = (item.Config.Id, vm.Vmid);
+        string? upid = null;
+        PveClient? client = null;
+        if (!await RunAsync($"Could not start {label}", async c =>
+        {
+            upid = await c.StartGuestAsync(vm);
+            client = c;
+        })) return;
+        LauncherLog.Write($"start: {label} on {vm.Node}: {client!.Scrub(upid!)}");
+        ShowInfo($"Starting {label}…", InfoBarSeverity.Informational);
+        _starting.Add(key);
+        UpdateButtons();
+        PveTask? task = null;
+        try { task = await client!.WaitForTaskAsync(vm.Node, upid!, StartTaskPoll, StartTaskLimit); }
+        catch (PveApiException ex) { LauncherLog.Write($"start: {label}: the task's status can't be read ({ex.Message})"); }
+        catch (ObjectDisposedException) { } // signed out meanwhile
+        finally
+        {
+            _starting.Remove(key);
+            UpdateButtons();
+        }
+        if (task is { Failed: true })
+        {
+            ShowError($"Could not start {label}", task.Error);
+            // The list is fetched again either way: a failed start may still have changed the guest (review R5).
+            if (SelectedServer?.Config.Id == item.Config.Id) _autoRefresh.FollowUp(() => true);
+            return;
+        }
+        LauncherLog.Write($"start: {label}: {(task is null ? "task status unknown" : task.Running ? "still running" : task.ExitStatus)}");
+        if (SelectedServer?.Config.Id != item.Config.Id) return;
+        ShowInfo(task is { Running: false } ? $"Started {label}." : $"{label} is starting.", InfoBarSeverity.Success);
+        // Refreshes now, then every 2 s until the guest is no longer listed as stopped, for at most 30 s: an
+        // HA-managed guest's task only asks the HA manager, which starts it a little later.
+        _autoRefresh.FollowUp(() => _guests.FirstOrDefault(v => v.Vmid == vm.Vmid) is not { Status: "stopped" });
+    }
 
     void OnGuestDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
 
@@ -440,6 +632,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         var vmOnly = guest?.Vm.Type == PveGuestType.Lxc ? Visibility.Collapsed : Visibility.Visible;
         MenuConsole.Visibility = MenuSpice.Visibility = MenuVnc.Visibility = vmOnly;
         MenuConsole.IsEnabled = MenuSpice.IsEnabled = MenuVnc.IsEnabled = MenuTerminal.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
+        MenuStart.Visibility = guest is not null && OffersStart(guest) ? Visibility.Visible : Visibility.Collapsed;
+        MenuStart.IsEnabled = !_busy;
     }
 
     void OnOpenConsole(object sender, RoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
@@ -515,11 +709,13 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         Task<int?>? exited = null;
         await RunAsync($"Could not open the terminal of {g.Label}", async c =>
         {
-            // Looks for Windows Terminal at each launch, before the descriptor is requested, so a chosen one that is
-            // missing costs no ticket renewal.
+            // Looks for the terminal at each launch, before the descriptor is requested, so a chosen one that is
+            // missing (or a custom command without {pipe}) costs no ticket renewal.
             var scan = WindowsTerminalLocator.Scan();
             ShowTerminalDetection(scan);
-            var target = TerminalLauncher.Resolve(host, scan);
+            var target = host is TerminalHost.Mintty or TerminalHost.Custom
+                ? TerminalLauncher.Resolve(host, _settings.TerminalCommand)
+                : TerminalLauncher.Resolve(host, scan);
             var d = await c.CreateTermDescriptorAsync(g.Vm);
             exited = await TerminalLauncher.LaunchAsync(d, bridge, target);
             LauncherLog.Write($"terminal: {g.Label} on {g.Vm.Node} via {host}: {target}");
@@ -614,6 +810,19 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             : $"A new tab in {auto.Path} ({scan.PreferredReason}).");
         Label(WtTerminalItem, TerminalHost.WindowsTerminal, "Windows Terminal");
         Label(WtPreviewTerminalItem, TerminalHost.WindowsTerminalPreview, "Windows Terminal Preview");
+        // mintty: shown when found (or chosen); a few file checks, as for Windows Terminal.
+        var mintty = MinttyLocator.Scan();
+        MinttyTerminalItem.Visibility = mintty.Count > 0 || _settings.Terminal == TerminalHost.Mintty ? Visibility.Visible : Visibility.Collapsed;
+        MinttyTerminalItem.Content = mintty.Count > 0 ? $"mintty ({mintty[0].DisplayName})" : "mintty (not found)";
+        ToolTipService.SetToolTip(MinttyTerminalItem, mintty.Count > 0
+            ? $"A new mintty window, {mintty[0].Path}, with MSYS=enable_pcon."
+            : "mintty was not found on PATH, in MSYS2 or in Git for Windows.");
+        // The custom command lives in launcher.json; the item shows only when one is set (or it is chosen).
+        CustomTerminalItem.Visibility = _settings.TerminalCommand.Count > 0 || _settings.Terminal == TerminalHost.Custom
+            ? Visibility.Visible : Visibility.Collapsed;
+        ToolTipService.SetToolTip(CustomTerminalItem, _settings.TerminalCommand.Count > 0
+            ? "terminalCommand in launcher.json: " + string.Join(" ", _settings.TerminalCommand)
+            : "Set terminalCommand in launcher.json.");
 
         // The closed box shows a copy of the selected item's text; selecting the item again refreshes it.
         if (!TerminalChoice.IsDropDownOpen) RefreshTerminalChoiceBox();

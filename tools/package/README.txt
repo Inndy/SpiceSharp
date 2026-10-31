@@ -158,10 +158,15 @@ from the folder above it.
                and either a user name and realm (pam, pve, ...) for password sign-in, or an
                API token ID (user@realm!tokenname). The token needs the VM.Console privilege,
                and VM.Audit for "Open console" to tell SPICE from VNC (without it, SPICE).
-  CA           optional. Paste the PVE CA certificate (PEM, /etc/pve/pve-root-ca.pem on any
-               node) to trust that CA and nothing else. Leave it empty if the server has a
-               certificate Windows already trusts (for example from Let's Encrypt). The
-               server's name must match its certificate either way.
+  CA or server certificate
+               optional, PEM. Either the PVE CA certificate (/etc/pve/pve-root-ca.pem on any
+               node), to trust that CA and nothing else; the server's name must then match
+               its certificate. Or the server's own certificate (for example
+               /etc/pve/local/pve-ssl.pem on that node), to trust exactly that certificate;
+               its name is then not checked, so an address it doesn't list (an IP address,
+               a DNS alias, a proxy) works. A certificate that renews must be pasted again.
+               Leave it empty if the server has a certificate Windows already trusts (for
+               example from Let's Encrypt); the name must then match too.
   Sign in      the password or token secret is asked for when you first connect. Tick
                "Remember in Windows Credential Manager" to keep it there (never in a file).
                Accounts with two-factor authentication are asked for the authenticator
@@ -175,6 +180,10 @@ from the folder above it.
                opens the terminal. The connection data goes through a pipe, never a file. A
                VM that is stopped shows the server's error. Right-click a VM to choose
                SPICE or VNC yourself.
+  Start        a stopped VM or container shows "Start" (button or right-click), as the web
+               UI's Start does. It needs the VM.PowerMgmt privilege; when the server says
+               the account lacks it, Start is not shown. The launcher follows the start
+               task for up to 2 minutes and shows its error if the start fails.
   VNC          "Open VNC console" opens a VM's VNC display in a VNC viewer you install
                yourself. PveTerm.exe (no window) signs in to the VM's VNC server and offers
                the session on a one-time port on 127.0.0.1; only a program running as you
@@ -209,13 +218,29 @@ from the folder above it.
                    one it will open.
                  Windows Terminal, Windows Terminal Preview: a tab in that one (listed
                    when installed).
+                 mintty: a new mintty window (listed when found: mintty.exe on PATH, MSYS2
+                   or Git for Windows, installed normally or with scoop). The launcher
+                   sets MSYS=enable_pcon for it, which PveTerm needs to get a real console
+                   in mintty. If PveTerm fails, the window stays open to show why.
                  Default terminal app: a new console, which Windows 11 opens in your
                    default terminal app.
                  Console host (conhost): the classic console window.
+                 Custom command: set "terminal": "custom" and "terminalCommand" in
+                   data\launcher.json, as a list or as one command line (split like a
+                   Windows program's own; no shell runs it), for example
+                   "terminalCommand": ["C:\\Tools\\term.exe", "-e", "{exe}", "console",
+                     "--pipe", "{pipe}", "--nonce", "{nonce}"]
+                   ({exe} is PveTerm.exe, {title} the guest's name; {pipe} and {nonce} are
+                   required).
                In the terminal, type ~. at the start of a line to leave (~? lists the
                escapes). A VM's serial console can't learn the window's size: at its
                shell prompt, ~r types "stty rows R cols C" and Enter with the current size.
-  Refresh      F5 or the Refresh button. The list does not update by itself.
+  Refresh      the list updates by itself every 5 seconds while the launcher's window is
+               shown, and right away when you bring it back from the taskbar. Minimized or
+               hidden, it asks the server nothing. After a Start it checks every 2 seconds
+               until the guest is running (at most 30 seconds). F5 or the Refresh button
+               fetches it at once. Set "refreshSeconds" in data\launcher.json to change
+               the interval (2 to 3600), or to 0 to turn the automatic refresh off.
   Sign out     forgets the session in memory. "Forget saved..." deletes the remembered
                password or token secret of the selected server, or of all servers.
 

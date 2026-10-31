@@ -6,6 +6,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 | File | Scope |
 |---|---|
 | [2026-10-31-answers-followups.md](2026-10-31-answers-followups.md) | Five human-answer follow-ups: no-GC trim, software-only H.264 advertising, source notices/package contents, VNC order, serial stty escapes and offline regression |
+| [2026-10-31-launcher-answers.md](2026-10-31-launcher-answers.md) | Five-commit human-answers review: TLS leaf/CA trust, Start/task redaction, refresh concurrency/deadlines, mintty/custom commands, Python validity, and offline regressions |
 | [2026-10-31-status-overlay.md](2026-10-31-status-overlay.md) | Status overlay energy, dirty/scroll rectangles, shader byte identity, threading/allocation, hotkeys/privacy, and window-free regressions |
 | [2026-10-31-vnc-bridge.md](2026-10-31-vnc-bridge.md) | Five-commit VNC bridge security review: peer identity, handshake deadlines and bounds, framing/injection, hand-off, viewer commands, launcher routing, and offline regressions |
 | [2026-10-31-h264-software.md](2026-10-31-h264-software.md) | Software H.264 native safety, SPS routing and hardware/software handoff, energy/allocation, FFmpeg licensing/packaging, and window-free regressions |

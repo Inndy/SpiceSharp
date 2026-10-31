@@ -12,9 +12,11 @@ Usage: pve-vv.py <vmid> [out.vv | --config]   or   pve-vv.py --list
                  [--console | --here | --hidden] [--exe PATH] [-- VIEWER COMMAND with {host} {port} {hostport} {title}]
                                               start `PveTerm vnc` (docs/decisions/0043): the VM's VNC display through
                                               a loopback bridge in the user's VNC viewer; same as --term vnc:<vmid>
-Every API request verifies the server the way PveTerm does (docs/decisions/0033): against the CA in the PEM file
-that an optional PVE_CA_FILE line names (relative to the token file's folder), else against the system trust store,
-with the hostname checked in both cases. No request, and so no credential, goes to an unverified server.
+Every API request verifies the server the way PveTerm does (docs/decisions/0033) against the PEM file that an
+optional PVE_CA_FILE line names (relative to the token file's folder): a CA in it (CA=true) is the only root and the
+hostname is checked; a server certificate in it (no CA in the file) must be exactly the one presented, and the
+hostname is not checked. Without PVE_CA_FILE, the system trust store and the hostname decide. No request, and so no
+credential, goes to an unverified server.
 """
 import json, os, ssl, sys, urllib.request, urllib.parse
 
@@ -33,9 +35,93 @@ if cfg.get("PVE_CA_FILE"):
 
 base = cfg["PVE_URL"].rstrip("/") + "/api2/json"
 auth = {"Authorization": f"PVEAPIToken={cfg['TOKEN_ID']}={cfg['TOKEN_SECRET']}"}
+def _der_items(buf, i, end):
+    """The DER TLVs between i and end, as (tag, value start, value end)."""
+    while i < end:
+        tag, n = buf[i], buf[i + 1]
+        i += 2
+        if n & 0x80:
+            k = n & 0x7F
+            n = int.from_bytes(buf[i:i + k], "big")
+            i += k
+        yield tag, i, i + n
+        i += n
+
+def _cert_facts(der):
+    """(is a CA by basic constraints, notBefore, notAfter) from a DER certificate, as Pve.Term.PveTls reads them."""
+    import datetime
+    _, s, e = next(_der_items(der, 0, len(der)))                # Certificate
+    _, s, e = next(_der_items(der, s, e))                       # TBSCertificate
+    items = list(_der_items(der, s, e))
+    if items[0][0] == 0xA0: items = items[1:]                   # [0] version
+    _, vs, ve = items[3]                                        # serial, signature, issuer, validity
+    def when(tag, a, b):
+        t = der[a:b].decode("ascii")
+        if tag == 0x17:
+            # UTCTime: X.509's own century rule (RFC 5280 4.1.2.5.1), YY >= 50 is 19YY, else 20YY; Python's %y
+            # would put the cut at 69 (review R2).
+            t = ("19" if int(t[:2]) >= 50 else "20") + t
+        return datetime.datetime.strptime(t, "%Y%m%d%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+    nb, na = [when(*t) for t in _der_items(der, vs, ve)]
+    is_ca = False
+    for tag, a, b in items:
+        if tag != 0xA3: continue                                # [3] extensions
+        _, xs, xe = next(_der_items(der, a, b))
+        for _, es, ee in _der_items(der, xs, xe):
+            parts = list(_der_items(der, es, ee))
+            if der[parts[0][1]:parts[0][2]] != b"\x55\x1d\x13": continue   # 2.5.29.19 basicConstraints
+            _, os_, oe = parts[-1]                              # extnValue OCTET STRING
+            _, bs, be = next(_der_items(der, os_, oe))          # BasicConstraints SEQUENCE
+            first = next(_der_items(der, bs, be), None)
+            is_ca = first is not None and first[0] == 0x01 and der[first[1]] != 0
+    return is_ca, nb, na
+
+class _PinnedLeafContext(ssl.SSLContext):
+    """A pinned server certificate (docs/decisions/0033's amendment): the handshake must present exactly one of these
+    certificates; the host name and issuer are not checked. The check runs inside wrap_socket, right after the
+    handshake, so no request (and no credential) goes out before it. The pin's validity dates are checked at every
+    handshake, not only when the context is made (review R2)."""
+    pins = {}  # DER -> (notBefore, notAfter)
+    def wrap_socket(self, sock, *args, **kwargs):
+        import datetime
+        s = super().wrap_socket(sock, *args, **kwargs)
+        dates = self.pins.get(s.getpeercert(binary_form=True))
+        if dates is None:
+            s.close()
+            raise ssl.SSLCertVerificationError("the server's certificate is not the pinned certificate")
+        if not dates[0] <= datetime.datetime.now(datetime.timezone.utc) <= dates[1]:
+            s.close()
+            raise ssl.SSLCertVerificationError("the pinned server certificate is not valid now")
+        return s
+
+def _pinned_context(pem_file):
+    """As Pve.Term.PveTls: CA certificates (CA=true) are the only roots and the hostname is checked; without any CA,
+    the file's server certificates are matched exactly and the hostname is not checked. (PveTls also accepts a file
+    with both; this helper then uses only the CAs.)"""
+    import datetime, re
+    with open(pem_file, encoding="ascii") as f:
+        blocks = re.findall(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", f.read(), re.S)
+    if not blocks: raise SystemExit(f"PVE_CA_FILE has no certificate")
+    cas, leaves = [], []
+    for b in blocks:
+        der = ssl.PEM_cert_to_DER_cert(b)
+        is_ca, nb, na = _cert_facts(der)
+        (cas if is_ca else leaves).append((b, der, nb, na))
+    if cas:
+        return ssl.create_default_context(cadata="\n".join(b for b, *_ in cas)), "pinned CA + hostname"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    valid = tuple(der for _, der, nb, na in leaves if nb <= now <= na)
+    if not valid: raise SystemExit("PVE_CA_FILE: the pinned server certificate is not valid now")
+    c = _PinnedLeafContext(ssl.PROTOCOL_TLS_CLIENT)
+    c.check_hostname = False
+    c.verify_mode = ssl.CERT_NONE
+    c.pins = {der: (nb, na) for _, der, nb, na in leaves}
+    return c, "pinned server certificate (exact match, no hostname check)"
+
 ctx = ssl.create_default_context()
+trust_mode = "system trust + hostname"
 if cfg.get("PVE_CA_FILE"):
-    ctx = ssl.create_default_context(cafile=cfg["PVE_CA_FILE"])  # pinned: only this CA, hostname still checked
+    ctx, trust_mode = _pinned_context(cfg["PVE_CA_FILE"])
 
 def call(method, path, data=None):
     body = urllib.parse.urlencode(data).encode() if data is not None else None
@@ -96,9 +182,9 @@ if sys.argv[1] == "--term-probe":
     try:
         with socket.create_connection((u.hostname, u.port or 8006), timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname=u.hostname):
-                print(f"{'pinned CA' if cfg.get('PVE_CA_FILE') else 'system trust'} + hostname: OK")
+                print(f"{trust_mode}: OK")
     except ssl.SSLError as e:
-        print(f"{'pinned CA' if cfg.get('PVE_CA_FILE') else 'system trust'} + hostname: FAILED ({e.reason})")
+        print(f"{trust_mode}: FAILED ({e.reason or e})")
     sys.exit(0)
 
 def term_main(argv):
@@ -115,7 +201,7 @@ def term_main(argv):
     PATH; without any, a new console window. --wt PATH uses that wt.exe. --console forces a new console window.
     --here runs PveTerm in this console (e.g. a terminal multiplexer pane). --hidden starts COMMAND without any
     window (for the pseudoconsole harness in tests/Pve.Term.Tests, which shows nothing either). COMMAND replaces
-    all of these; its arguments may use {pipe}, {nonce} and {exe}. --prefetch requests the termproxy session here
+    all of these; its arguments may use {pipe}, {nonce}, {exe} and (not for vnc:) {title}. --prefetch requests the termproxy session here
     instead of in PveTerm. The descriptor carries the PVE_CA_FILE CA when one is configured (PveTerm then pins it),
     else none (system trust). The spiceproxy answer's CA is the cluster CA for SPICE, not necessarily the API's
     issuer.
@@ -324,19 +410,23 @@ def term_main(argv):
     server.start()
 
     exe = opts["exe"] or os.path.join(root, "src", "PveTerm", "bin", "Debug", "net10.0-windows10.0.17763.0", "PveTerm.exe")
+    # As Pve.Api.TerminalLauncher: the descriptor's display name as the tab title (and {title}), without the ';'
+    # that Windows Terminal reads as a command separator, or quotes.
+    node = d.get("node", "")
+    title = {"node": f"{node} shell", "lxc": f"CT {d.get('vmid')} on {node}", "vnc": f"VM {d.get('vmid')} on {node}"}.get(
+        kind, f"VM {d.get('vmid')} {d.get('serial') or 'serial'} on {node}")
+    title = "".join(c for c in title if c.isprintable() and c not in ';"')[:80] or "PveTerm"
     if command is None:
         command = ["{exe}", "vnc" if vnc else "console", "--pipe", "{pipe}", "--nonce", "{nonce}"]
         if vnc:
             command += vnc_args + (["--"] + viewer_command if viewer_command is not None else [])
         elif host:
-            # As Pve.Api.TerminalLauncher: the descriptor's display name as the tab title, without the ';' that
-            # Windows Terminal reads as a command separator, or quotes.
-            title = {"node": f"{d['node']} shell", "lxc": f"CT {d.get('vmid')} on {d['node']}"}.get(
-                kind, f"VM {d.get('vmid')} {d.get('serial') or 'serial'} on {d['node']}")
-            title = "".join(c for c in title if c.isprintable() and c not in ';"')[:80] or "PveTerm"
             # The bridge path keeps its ';' but escaped as "\;", a literal ';' to Windows Terminal (review R3).
             command = [host[0], "-w", "0", "new-tab", "--title", title, "--", exe.replace(";", "\\;")] + command[1:]
-    command = [c.replace("{pipe}", name).replace("{nonce}", nonce).replace("{exe}", exe) for c in command]
+    # One pass per argument, as Pve.Api.TerminalCommand.Expand: a title holding "{nonce}" stays text. For vnc:, {title}
+    # (like {host} and {port}) belongs to the viewer command PveTerm fills, so it is left alone here.
+    fill = {"pipe": name, "nonce": nonce, "exe": exe} | ({} if vnc else {"title": title})
+    command = [__import__("re").sub(r"\{(pipe|nonce|exe|title)\}", lambda m: fill.get(m.group(1), m.group(0)), c) for c in command]
     # CREATE_NO_WINDOW : this console (--here, e.g. a terminal multiplexer pane) : nothing for wt.exe (a GUI
     # program) : CREATE_NEW_CONSOLE
     flags = 0x08000000 if opts["hidden"] else 0 if opts["here"] or host else 0x00000010

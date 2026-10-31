@@ -73,7 +73,7 @@ static class Dialogs
         var token = new TextBox { Header = "Token ID", Text = c.TokenId, PlaceholderText = "user@realm!tokenname" };
         var ca = new TextBox
         {
-            Header = "CA certificate to pin (PEM, optional)",
+            Header = "CA or server certificate to pin (PEM, optional)",
             Text = c.CaPem ?? "",
             PlaceholderText = "-----BEGIN CERTIFICATE-----\n…\nLeave empty to use the Windows certificate store.",
             AcceptsReturn = true,
@@ -81,8 +81,10 @@ static class Dialogs
             Height = 110,
             FontFamily = new FontFamily("Consolas"),
         };
-        var caNote = Note("With a CA, the server must present a certificate issued by it, and only by it. Proxmox's own CA is " +
-                          "/etc/pve/pve-root-ca.pem on any node. Without one, Windows decides, as a browser would.");
+        var caNote = Note("A CA (Proxmox's own is /etc/pve/pve-root-ca.pem on any node): the server must present a certificate " +
+                          "issued by it, and only by it, that names the server's address. A server certificate (for example " +
+                          "/etc/pve/local/pve-ssl.pem): the server must present exactly that one, and its name isn't checked. " +
+                          "Empty: Windows decides, as a browser would.");
         var secretNote = Note("The password or token secret is asked for when you connect. If you choose to remember it, it is " +
                               "kept in Windows Credential Manager, never in the server list.");
         var error = ErrorText();

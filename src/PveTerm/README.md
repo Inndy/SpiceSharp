@@ -16,7 +16,7 @@ PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|non
 ```
 
 - The launcher creates the named pipe `\\.\pipe\NAME` and passes NAME and a one-time HEX nonce. The connection data
-  (API URL, target, API token or login cookie, optional pinned CA) travels only through that pipe. Neither the
+  (API URL, target, API token or login cookie, optional pinned CA or server certificate) travels only through that pipe. Neither the
   command line nor the disk ever holds a secret. `Pve.Term.HandoffServer` is the launcher side.
 - `--keepalive` sets the idle time before a termproxy ping: default 240 s, `0` turns it off.
 - `--escape` sets the escape character (default `~`, see below); `none` turns the escape off. `.`, `?` and `r` are
@@ -116,8 +116,9 @@ python tools/wt_locate.py                            # which Windows Terminal th
 ```
 
 The helper verifies the API's certificate for its own requests the way PveTerm does: against the system roots, or
-against a CA PEM named by a `PVE_CA_FILE: path` line in `PVE_TOKEN_DONT_COMMIT.txt` (relative to that file's folder),
-which it also hands to PveTerm to pin. Don't use the CA from a `.vv` file or a `spiceproxy` answer for this: that is
+against a PEM named by a `PVE_CA_FILE: path` line in `PVE_TOKEN_DONT_COMMIT.txt` (relative to that file's folder),
+which it also hands to PveTerm to pin. A CA in it (CA=true) keeps the hostname check; a server certificate in it (with
+no CA in the file) must be exactly the one presented, and the hostname is not checked (docs/decisions/0033). Don't use the CA from a `.vv` file or a `spiceproxy` answer for this: that is
 the cluster's SPICE CA, not necessarily the API certificate's issuer.
 
 The window-free tests in `tests/Pve.Term.Tests` run PveTerm under a pseudoconsole against a loopback fake termproxy.

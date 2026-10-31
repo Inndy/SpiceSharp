@@ -101,6 +101,7 @@
                 <!-- The row's ContextRequested selects the row under the pointer before this opens. -->
                 <ListView.ContextFlyout>
                     <MenuFlyout Opening="OnGuestMenuOpening">
+                        <MenuFlyoutItem x:Name="MenuStart" Text="Start" Click="OnStart" />
                         <MenuFlyoutItem x:Name="MenuConsole" Text="Open console" Click="OnOpenConsole" />
                         <MenuFlyoutItem x:Name="MenuSpice" Text="Open SPICE console" Click="OnOpenSpice" />
                         <MenuFlyoutItem x:Name="MenuVnc" Text="Open VNC console" Click="OnOpenVnc" />
@@ -134,6 +135,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -147,9 +149,12 @@
                         ToolTipService.ToolTip="VM: its VNC display in your own VNC viewer, through PveTerm's VNC bridge." />
                 <Button x:Name="TerminalButton" Grid.Column="2" Content="Open terminal" Click="OnOpenTerminal" IsEnabled="False"
                         ToolTipService.ToolTip="VM: serial console. Container: console. Opens in your terminal through PveTerm." />
-                <TextBlock Grid.Column="4" Text="VNC viewer:" VerticalAlignment="Center" />
+                <!-- Shown only for a stopped guest the account may start (VM.PowerMgmt, when the server says). -->
+                <Button x:Name="StartButton" Grid.Column="3" Content="Start" Click="OnStart" Visibility="Collapsed"
+                        ToolTipService.ToolTip="Start this stopped guest, as the web UI's Start does" />
+                <TextBlock Grid.Column="5" Text="VNC viewer:" VerticalAlignment="Center" />
                 <!-- Items in the order of MainWindow.VncChoices; labelled from the detection when the list opens. -->
-                <ComboBox x:Name="VncChoice" Grid.Column="5" SelectionChanged="OnVncChoiceChanged"
+                <ComboBox x:Name="VncChoice" Grid.Column="6" SelectionChanged="OnVncChoiceChanged"
                           DropDownOpened="OnVncChoiceOpened" MinWidth="180">
                     <ComboBoxItem x:Name="AutoVncItem" Content="Automatic" />
                     <ComboBoxItem x:Name="TigerVncItem" Content="TigerVNC" />
@@ -159,16 +164,18 @@
                     <ComboBoxItem Content="None (connect one yourself)" />
                     <ComboBoxItem x:Name="CustomVncItem" Content="Custom command (launcher.json)" />
                 </ComboBox>
-                <TextBlock Grid.Column="6" Text="Terminal:" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="7" Text="Terminal:" VerticalAlignment="Center" />
                 <!-- Items in the order of MainWindow.TerminalChoices. The Windows Terminal items are labelled from the
                      detection and shown only when found (or chosen). -->
-                <ComboBox x:Name="TerminalChoice" Grid.Column="7" SelectionChanged="OnTerminalChoiceChanged"
+                <ComboBox x:Name="TerminalChoice" Grid.Column="8" SelectionChanged="OnTerminalChoiceChanged"
                           DropDownOpened="OnTerminalChoiceOpened" DropDownClosed="OnTerminalChoiceClosed" MinWidth="200">
                     <ComboBoxItem x:Name="AutoTerminalItem" Content="Automatic" />
                     <ComboBoxItem x:Name="WtTerminalItem" Content="Windows Terminal" />
                     <ComboBoxItem x:Name="WtPreviewTerminalItem" Content="Windows Terminal Preview" />
+                    <ComboBoxItem x:Name="MinttyTerminalItem" Content="mintty" />
                     <ComboBoxItem Content="Default terminal app (new console)" />
                     <ComboBoxItem Content="Console host (conhost)" />
+                    <ComboBoxItem x:Name="CustomTerminalItem" Content="Custom command (launcher.json)" />
                 </ComboBox>
             </Grid>
         </Grid>

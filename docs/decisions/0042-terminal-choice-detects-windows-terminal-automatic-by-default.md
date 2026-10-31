@@ -84,3 +84,45 @@
     - the class IDs are fixed in code (verified above). A Windows Terminal release that changed them would only
       lose step 1, and the alias would still decide;
     - a launch with Windows Terminal reports no PveTerm exit code, as `wt` already didn't.
+
+## Amendment (2026-10-31): mintty and a custom command
+
+- Decided by: the human (2026-10-31, through agentdesk, recorded in 0038's answers): "mintty works with
+  `MSYS=enable_pcon`; the launcher gets a mintty choice (setting that variable) and custom command templates."
+  The details below are the agent's (spec silent), not yet reviewed.
+- **Choices.** The settings file also stores `mintty` and `custom`. The list shows "mintty (MSYS2 (scoop))" and the
+  like when one is found (or when it is the saved choice, then "not found"), and "Custom command (launcher.json)"
+  when `terminalCommand` is set (or chosen). Automatic is unchanged: it never picks mintty.
+- **Where mintty is looked for** (`Pve.Api.MinttyLocator`, file checks only, each time a terminal opens or the list
+  opens): `mintty.exe` in a fully qualified PATH folder; MSYS2 in scoop (`%SCOOP%` or `%USERPROFILE%\scoop`, then
+  `%SCOOP_GLOBAL%` or `%ProgramData%\scoop`, `apps\msys2\current\usr\bin`); `%SystemDrive%\msys64\usr\bin`; Git for
+  Windows in scoop (`apps\git\current\usr\bin`), `%ProgramFiles%\Git\usr\bin`, `%LOCALAPPDATA%\Programs\Git\usr\bin`.
+  The first found is used; its path is in the tooltip and the log. Cygwin's mintty is not looked for (its runtime
+  reads `CYGWIN`, not `MSYS`). Verified on the development machine (2026-10-31, read only): scoop's MSYS2 and Git
+  both have `usr\bin\mintty.exe`; MSYS2's is mintty 3.8.3, whose man page and `--help` text list `-t/--title`,
+  `-h/--hold never|start|error|always` and `-e/--exec`.
+- **mintty's command:** `mintty.exe --title TITLE --hold error --exec PveTerm.exe console --pipe NAME --nonce HEX`,
+  started without ShellExecute so the environment can be set:
+  - `MSYS` is the user's own value with ` enable_pcon` added last (the runtime reads its options in order, so this
+    wins over a `disable_pcon` for this window only). Without it the MSYS runtime gives a native program pipes, not a
+    console, and PveTerm can't run (the human's finding). mintty 3.x also has `--pcon on`; it isn't used, since an
+    older mintty would refuse an option it doesn't know;
+  - `MSYS2_ARG_CONV_EXCL=*` and `MSYS_NO_PATHCONV=1`, so the runtime doesn't rewrite an argument as a POSIX path;
+  - `--hold error` keeps the window open when PveTerm exits with an error, so its message can be read;
+  - mintty runs PveTerm, so mintty's exit before the hand-off ends it (as conhost's does); its exit code is mintty's,
+    so none is reported.
+- **Custom command** (`terminalCommand` in launcher.json, with `"terminal": "custom"`):
+  - a list (program, then arguments), or one string split as the Microsoft C runtime splits a command line
+    (`Pve.Api.TerminalCommand.Split`: white space separates, quotes group, `""` in quotes is a quote, backslashes
+    count only before a quote). A string is written back as a string;
+  - placeholders `{exe}` (PveTerm.exe's full path), `{pipe}`, `{nonce}` and `{title}`, as `tools/pve-vv.py --term
+    ... -- COMMAND` (which now fills `{title}` too). They are filled in one pass, so a guest named `{nonce}` stays
+    text. `{title}` loses control characters, `;` and `"`, as Windows Terminal's title does, so a command that runs
+    wt.exe can't be split by it;
+  - no shell: the first element is the program (found by CreateProcess's rules), the others are its arguments;
+  - a command that is empty, or lacks `{pipe}` or `{nonce}`, is refused before the descriptor is requested;
+  - the program may hand the command on and exit (as wt.exe does), so its exit doesn't end the hand-off; the
+    30-second deadline does. No exit code is reported.
+- Amended after review R4 ([../reviews/2026-10-31-launcher-answers.md](../reviews/2026-10-31-launcher-answers.md)):
+  when a custom command's program is `wt.exe` or `wt`, `{exe}` is filled with the bridge path's `;` escaped as `\;`,
+  as the built-in Windows Terminal choice does.

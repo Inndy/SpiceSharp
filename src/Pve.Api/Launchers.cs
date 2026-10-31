@@ -76,6 +76,12 @@ public enum TerminalHost
     Auto,
     /// <summary>A new tab in Windows Terminal Preview.</summary>
     WindowsTerminalPreview,
+    /// <summary>A new mintty window (MSYS2 or Git for Windows), with <c>MSYS=enable_pcon</c> so PveTerm gets a pseudo
+    /// console (<see cref="MinttyLocator"/>).</summary>
+    Mintty,
+    /// <summary>The user's own command from launcher.json, with <c>{exe}</c>, <c>{pipe}</c>, <c>{nonce}</c> and
+    /// <c>{title}</c> (<see cref="TerminalCommand"/>).</summary>
+    Custom,
 }
 
 /// <summary>A terminal choice resolved for one launch (<see cref="TerminalLauncher.Resolve(TerminalHost)"/>).
@@ -86,11 +92,25 @@ public sealed record TerminalTarget
 {
     public TerminalHost Host { get; }
     public WindowsTerminalInstall? WindowsTerminal { get; }
+    public MinttyInstall? Mintty { get; }
+    /// <summary>The custom command's template, for <see cref="TerminalHost.Custom"/>.</summary>
+    public IReadOnlyList<string>? Command { get; }
 
-    TerminalTarget(TerminalHost host, WindowsTerminalInstall? wt) => (Host, WindowsTerminal) = (host, wt);
+    TerminalTarget(TerminalHost host, WindowsTerminalInstall? wt, MinttyInstall? mintty = null, IReadOnlyList<string>? command = null) =>
+        (Host, WindowsTerminal, Mintty, Command) = (host, wt, mintty, command);
 
     /// <summary>A new tab in this Windows Terminal.</summary>
     public static TerminalTarget In(WindowsTerminalInstall wt) => new(TerminalHost.WindowsTerminal, wt);
+
+    /// <summary>A new window of this mintty.</summary>
+    public static TerminalTarget In(MinttyInstall mintty) => new(TerminalHost.Mintty, null, mintty);
+
+    /// <summary>The user's command; it must hold <c>{pipe}</c> and <c>{nonce}</c>.</summary>
+    public static TerminalTarget Custom(IReadOnlyList<string>? command)
+    {
+        TerminalCommand.Check(command);
+        return new(TerminalHost.Custom, null, null, command!.ToArray());
+    }
 
     /// <summary><see cref="TerminalHost.Default"/> or <see cref="TerminalHost.Conhost"/>.</summary>
     public static TerminalTarget Console(TerminalHost host) => host is TerminalHost.Default or TerminalHost.Conhost
@@ -101,6 +121,8 @@ public sealed record TerminalTarget
     public override string ToString() => Host switch
     {
         TerminalHost.WindowsTerminal => $"{WindowsTerminal!.DisplayName} ({WindowsTerminal.Path})",
+        TerminalHost.Mintty => $"mintty, {Mintty!.DisplayName} ({Mintty.Path})",
+        TerminalHost.Custom => $"the custom command ({Command![0]})",
         TerminalHost.Conhost => "conhost",
         _ => "a new console",
     };
@@ -133,16 +155,26 @@ public static class TerminalLauncher
             exitMeansAbandoned: ExitMeansAbandoned(target.Host), exitCodeIsBridge: ExitCodeIsBridge(target.Host), ct).ConfigureAwait(false);
     }
 
-    /// <summary>wt.exe hands the command to a running terminal and exits at once; the other hosts are the bridge or
-    /// its console host.</summary>
-    internal static bool ExitMeansAbandoned(TerminalHost resolved) => resolved != TerminalHost.WindowsTerminal;
+    /// <summary>wt.exe hands the command to a running terminal and exits at once, and a custom command may do the
+    /// same; the other hosts are the bridge, its console host, or mintty, which runs it.</summary>
+    internal static bool ExitMeansAbandoned(TerminalHost resolved) => resolved is not (TerminalHost.WindowsTerminal or TerminalHost.Custom);
 
     /// <summary>Only a bridge started directly is the process we hold.</summary>
     internal static bool ExitCodeIsBridge(TerminalHost resolved) => resolved == TerminalHost.Default;
 
-    /// <summary>Resolves a choice, looking for Windows Terminal only when the choice needs it.</summary>
-    public static TerminalTarget Resolve(TerminalHost choice) =>
-        Resolve(choice, choice is TerminalHost.Default or TerminalHost.Conhost ? WindowsTerminalScan.Nothing : WindowsTerminalLocator.Scan());
+    /// <summary>Resolves a choice, looking for Windows Terminal or mintty only when the choice needs it.</summary>
+    /// <param name="customCommand">The custom command's template, for <see cref="TerminalHost.Custom"/>.</param>
+    public static TerminalTarget Resolve(TerminalHost choice, IReadOnlyList<string>? customCommand = null) => choice switch
+    {
+        TerminalHost.Mintty => ResolveMintty(MinttyLocator.Scan()),
+        TerminalHost.Custom => TerminalTarget.Custom(customCommand),
+        _ => Resolve(choice, choice is TerminalHost.Default or TerminalHost.Conhost ? WindowsTerminalScan.Nothing : WindowsTerminalLocator.Scan()),
+    };
+
+    /// <summary>The first mintty found, or an error that says where it was looked for.</summary>
+    public static TerminalTarget ResolveMintty(IReadOnlyList<MinttyInstall> found) => found.Count > 0
+        ? TerminalTarget.In(found[0])
+        : throw new PveApiException("mintty was not found (on PATH, in MSYS2 or Git for Windows, or their scoop apps). Install one, or choose another terminal.");
 
     /// <summary>
     /// <see cref="TerminalHost.Auto"/> becomes the Windows Terminal the scan prefers, or <see cref="TerminalHost.Default"/>.
@@ -156,6 +188,7 @@ public static class TerminalLauncher
         TerminalHost.WindowsTerminalPreview => TerminalTarget.In(scan.For(choice) ?? throw new PveApiException(
             "Windows Terminal Preview was not found (its app execution alias is missing or turned off). Install it, or choose another terminal.")),
         TerminalHost.Conhost => TerminalTarget.Console(TerminalHost.Conhost),
+        TerminalHost.Mintty or TerminalHost.Custom => throw new ArgumentOutOfRangeException(nameof(choice), choice, "resolved by Resolve(choice, customCommand)"),
         _ => TerminalTarget.Console(TerminalHost.Default),
     };
 
@@ -224,14 +257,41 @@ public static class TerminalLauncher
         var psi = new ProcessStartInfo { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(bridgeExe) ?? "" };
         switch (target.Host)
         {
+            case TerminalHost.Custom:
+                // No shell: the template's first element is the program, the rest its arguments, each filled in once.
+                // CreateProcess gives a console program a new console, since the launcher has none.
+                psi.UseShellExecute = false;
+                string customTitle = SafeTitle(title, stripSeparators: true);
+                string program = TerminalCommand.Expand(target.Command![0], bridgeExe, pipe, nonce, customTitle);
+                // Windows Terminal reads ';' as a command separator even inside one argument; when the command runs
+                // wt.exe, the bridge's path keeps its ';' escaped as the built-in choice does (review R4). Other
+                // programs get the path as it is.
+                string exeArg = IsWindowsTerminal(program) ? EscapeWtSeparators(bridgeExe) : bridgeExe;
+                psi.FileName = program;
+                foreach (var a in target.Command.Skip(1)) psi.ArgumentList.Add(TerminalCommand.Expand(a, exeArg, pipe, nonce, customTitle));
+                return psi;
+            case TerminalHost.Mintty:
+                // The environment can only be set without ShellExecute. mintty is a GUI program, so no console opens.
+                psi.UseShellExecute = false;
+                psi.FileName = target.Mintty!.Path;
+                // MSYS=enable_pcon: PveTerm needs a pseudo console, which the MSYS runtime gives a native program only
+                // with this option (the human, 2026-10-31). Argument conversion is turned off, so nothing the bridge
+                // gets is rewritten as a POSIX path.
+                psi.Environment["MSYS"] = MinttyLocator.MsysWithPcon(psi.Environment.TryGetValue("MSYS", out var msys) ? msys : null);
+                psi.Environment["MSYS2_ARG_CONV_EXCL"] = "*";
+                psi.Environment["MSYS_NO_PATHCONV"] = "1";
+                // --hold error keeps the window open when PveTerm fails, so its message can be read.
+                foreach (var a in new[] { "--title", SafeTitle(title, stripSeparators: false), "--hold", "error", "--exec", bridgeExe })
+                    psi.ArgumentList.Add(a);
+                break;
             case TerminalHost.WindowsTerminal:
                 // The path found, so the tab opens in that Windows Terminal (stable, Preview or a portable copy).
                 psi.FileName = target.WindowsTerminal!.Path;
                 // Windows Terminal splits its arguments at ';'; the title must not end the command early.
-                string safe = new(title.Where(c => !char.IsControl(c) && c is not (';' or '"')).Take(80).ToArray());
+                string safe = SafeTitle(title, stripSeparators: true);
                 // The bridge's path can't lose a ';' (it would name another file), so it is escaped as "\;", which
                 // Windows Terminal reads as a literal ';' (review R3). Argv quoting alone doesn't stop the split.
-                foreach (var a in new[] { "-w", "0", "new-tab", "--title", safe.Length > 0 ? safe : "PveTerm", "--", EscapeWtSeparators(bridgeExe) })
+                foreach (var a in new[] { "-w", "0", "new-tab", "--title", safe, "--", EscapeWtSeparators(bridgeExe) })
                     psi.ArgumentList.Add(a);
                 break;
             case TerminalHost.Conhost:
@@ -245,6 +305,20 @@ public static class TerminalLauncher
         foreach (var a in new[] { "console", "--pipe", pipe, "--nonce", nonce }) psi.ArgumentList.Add(a);
         return psi;
     }
+
+    /// <summary>The title without control characters, at most 80 characters, "PveTerm" when nothing is left. With
+    /// <paramref name="stripSeparators"/>, also without ';' and '"', which Windows Terminal (and so a custom command
+    /// that runs it) would read as syntax.</summary>
+    internal static string SafeTitle(string title, bool stripSeparators)
+    {
+        string safe = new(title.Where(c => !char.IsControl(c) && !(stripSeparators && c is ';' or '"')).Take(80).ToArray());
+        return safe.Length > 0 ? safe : "PveTerm";
+    }
+
+    /// <summary>A program that is Windows Terminal's command line, <c>wt.exe</c> or <c>wt</c> by any path.</summary>
+    internal static bool IsWindowsTerminal(string program) =>
+        Path.GetFileName(program.Trim().Trim('"')) is var name
+        && (name.Equals(WindowsTerminalLocator.ExeName, StringComparison.OrdinalIgnoreCase) || name.Equals("wt", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Windows Terminal's command-line grammar splits at an unescaped ';'; <c>\;</c> is a literal one.</summary>
     internal static string EscapeWtSeparators(string arg) => arg.Replace(";", @"\;", StringComparison.Ordinal);

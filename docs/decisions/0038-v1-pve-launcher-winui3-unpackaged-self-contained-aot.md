@@ -96,7 +96,8 @@
     - The guest list shows VMID, name, node, type (qemu or lxc, templates marked) and status. Stopped guests are
       dimmed. A filter box matches the name, VMID or node.
     - **Refresh** (button or F5) fetches the list again. Nothing refreshes on a timer (energy rules); the list is also
-      fetched after each sign-in.
+      fetched after each sign-in. (Amended 2026-10-31 by answer 4: the list also refreshes by itself while the window
+      is shown; see "Amendments after the answers" below.)
     - **Open console** (double-click, Enter, or the button) on a VM:
       1. `POST .../spiceproxy` with `proxy` set to the API host, as the web UI does.
       2. The answer becomes .vv text, checked with `VvConnection.Parse`.
@@ -157,7 +158,8 @@
       window busy;
     - the body is read in pieces and refused once it passes 16 MiB, length given or not;
     - an error answer is read only up to 64 KiB, for its message.
-  - **Energy.** The launcher has no timer of its own:
+  - **Energy.** The launcher has no timer of its own (amended 2026-10-31: except the automatic refresh's one-shot
+    timer, which exists only while the window is shown and a list is up; see below):
     - the request deadline exists only while a request runs;
     - ticket renewal is lazy ([0039](0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md));
     - the HTTP pool closes idle connections after 60 s, after which its cleanup timer stops;
@@ -198,3 +200,58 @@
 - Launcher technology (asked again after the WinForms/.NET 4.8 idea): WinUI 3 stays.
 - Terminals: mintty works with `MSYS=enable_pcon`; the launcher gets a mintty choice (setting that variable) and
   custom command templates.
+
+## Amendments after the answers (agent, 2026-10-31; details spec silent, not yet reviewed)
+
+- **Start (answer 4).**
+  - The request is the web UI's: `POST /nodes/{node}/qemu/{vmid}/status/start` for a VM, `POST
+    /nodes/{node}/lxc/{vmid}/status/start` for a container, with no parameters. Both need `VM.PowerMgmt` on
+    `/vms/{vmid}` and answer at once with the UPID of a worker task: `qmstart` or `vzstart`, or `hastart` for an
+    HA-managed guest, whose task only asks the HA manager. Sources: qemu-server `src/PVE/API2/Qemu.pm` 3546-3731
+    (`vm_start`, at 6a9adaac); pve-container `src/PVE/API2/LXC/Status.pm` 118-216 (`vm_start`, at 761aea86).
+    `skiplock`, `stateuri`, `migratedfrom` and the like are root's or migration's and are never sent.
+  - The task is followed with `GET /nodes/{node}/tasks/{upid}/status` once a second, for at most 2 minutes (qm
+    start's own wait is max(30 s, 1 s per GiB of memory)). The owner of a task may always read it; others need
+    `Sys.Audit` on the node (pve-manager `PVE/API2/Tasks.pm` 27-37 and 454-544, at 73ac838f). A stopped task's
+    `exitstatus` is `OK`, `WARNINGS: N` or the error (pve-common `src/PVE/UPID.pm` 70-91, at b9b41d52); an error
+    is shown in the status bar, the others say "Started". A task whose status can't be read is logged, and the
+    list is fetched again either way.
+  - The UPID is checked against `PVE::UPID::decode`'s pattern (UPID.pm 35-36) before it goes into a path, and goes
+    in as one escaped segment.
+  - **Shown when:** the selected guest is `stopped`, is not a template, isn't being started from this window, and
+    the account may start it as far as the server has said. Selecting a stopped guest asks once per guest and
+    session, `GET /access/permissions?path=/vms/{vmid}` (pve-access-control `src/PVE/API2/AccessControl.pm`
+    509-574, at dff26b45: anyone may read their own). The server computes that path's effective privileges itself
+    (`RPCEnvironment::permissions`, the function its own check uses), so no ACL, group, pool or token-privsep rule is
+    copied here. A "no" hides Start (button and menu) and is logged; an answer that can't be had leaves it shown,
+    and the server decides when it is clicked. Errors (for example "403 Permission check failed") are shown.
+  - The window stays usable while the task is followed; only the start request itself holds the busy state.
+- **The list refreshes by itself (answer 4)**, within the energy rules (`Pve.Api.RefreshScheduler`, unit-tested with
+  a hand-moved clock; the window only reports what it can see):
+  - every `refreshSeconds` (launcher.json, default 5; 0 is off; a positive value is held to 2–3600 s) while the
+    window is shown and not minimized, and a signed-in server's list is up. Each refresh is one `GET
+    /cluster/resources?type=vm`; `/version` is not asked again;
+  - minimized, hidden, signed out or without a list: no timer exists at all. Shown again (restored, or brought back
+    from the taskbar): one refresh at once, then the interval. Activating a window that was already visible doesn't
+    add one;
+  - one refresh at a time: the timer is one-shot and set again when a refresh ends, so a slow server is never asked
+    twice at once. A manual Refresh or a sign-in pushes the next automatic one a whole interval away;
+  - after a Start's task ends: a refresh at once, then every 2 s until the guest is no longer `stopped`, for at most
+    30 s (an HA-managed guest is started by the HA manager a little after its task). This runs even with
+    `refreshSeconds` 0, since the user asked for it;
+  - the window is "shown" when `AppWindow.IsVisible` and its presenter isn't minimized, re-read on
+    `AppWindow.Changed`, `Activated` and `VisibilityChanged`;
+  - rows are updated in place (unchanged rows, the selection and the scroll position stay), and only when the answer
+    differs from the list shown;
+  - the automatic refresh never asks for a password. A session it finds ended stops it until the next sign-in, with
+    "The session ended. Refresh (F5) signs in again." Other errors are shown once until the server answers again. A
+    successful automatic refresh writes nothing to `launcher.log` (a failure does);
+  - a password session stays alive while the window is shown, since each refresh renews the ticket after 15 minutes,
+    as the web UI's own polling does.
+- **Terminals (answer on terminals):** the `terminal` setting also takes `mintty` and `custom`, with
+  `terminalCommand`; see [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md)'s amendment.
+- Amended after review ([../reviews/2026-10-31-launcher-answers.md](../reviews/2026-10-31-launcher-answers.md),
+  R1, R3, R5, R6): server text the launcher shows or logs (a UPID, a task's exit status, a request path) is
+  scrubbed of the session's secrets first (`PveClient.Scrub`). Manual and automatic list fetches share a request
+  counter, so only the latest started may update the list. A failed start also refreshes the list once. A follow-up
+  ends as soon as its next refresh would start after 30 s.

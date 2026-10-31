@@ -75,9 +75,16 @@ public sealed class LauncherSettings
     const int MaxBytes = 1 << 20;
 
     public List<PveServerConfig> Servers { get; } = [];
-    /// <summary>Stored as <c>auto</c>, <c>default</c>, <c>wt</c>, <c>wt-preview</c> or <c>conhost</c>; a missing or unknown value is
-    /// <see cref="TerminalHost.Auto"/> (docs/decisions/0042).</summary>
+    /// <summary>Stored as <c>auto</c>, <c>default</c>, <c>wt</c>, <c>wt-preview</c>, <c>conhost</c>, <c>mintty</c> or
+    /// <c>custom</c>; a missing or unknown value is <see cref="TerminalHost.Auto"/> (docs/decisions/0042).</summary>
     public TerminalHost Terminal { get; set; } = TerminalHost.Auto;
+    /// <summary><c>terminalCommand</c>: the custom terminal command, as program and arguments with <c>{exe}</c>,
+    /// <c>{pipe}</c>, <c>{nonce}</c> and <c>{title}</c>. The file may give it as a list, or as one string split the way
+    /// a Windows program splits its command line (<see cref="TerminalCommand.Split"/>; no shell). Edited in the file;
+    /// used when <see cref="Terminal"/> is custom.</summary>
+    public List<string> TerminalCommand { get; } = [];
+    /// <summary>The command as the one string the file gave, kept so a save writes it back the same way.</summary>
+    public string? TerminalCommandLine { get; set; }
     /// <summary>The VNC viewer (docs/decisions/0043), stored as <c>vncViewer</c>: <c>auto</c>, <c>tigervnc</c>,
     /// <c>tightvnc</c>, <c>ultravnc</c>, <c>realvnc</c>, <c>none</c> or <c>custom</c>; missing or unknown is auto.</summary>
     public VncViewerKind VncViewer { get; set; } = VncViewerKind.Auto;
@@ -86,6 +93,11 @@ public sealed class LauncherSettings
     /// custom.</summary>
     public List<string> VncCommand { get; } = [];
     public string? LastServerId { get; set; }
+    /// <summary><c>refreshSeconds</c>: how often the guest list refreshes by itself while the window is shown
+    /// (docs/decisions/0038); 0 is off. Missing or negative is <see cref="DefaultRefreshSeconds"/>; other values are
+    /// kept as written and clamped where they are used (<see cref="RefreshScheduler.Clamp"/>).</summary>
+    public int RefreshSeconds { get; set; } = DefaultRefreshSeconds;
+    public const int DefaultRefreshSeconds = 5;
 
     /// <summary>Why the file was not used, for the log; null when it was read or absent.</summary>
     public string? LoadProblem { get; private set; }
@@ -104,9 +116,20 @@ public sealed class LauncherSettings
                 ?? throw new InvalidDataException("the file is empty");
             if (file.Version != 1) throw new InvalidDataException($"unknown version {file.Version}");
             s.Terminal = ParseTerminal(file.Terminal);
+            switch (file.TerminalCommand)
+            {
+                case { ValueKind: JsonValueKind.String } line:
+                    s.TerminalCommandLine = line.GetString();
+                    s.TerminalCommand.AddRange(Api.TerminalCommand.Split(s.TerminalCommandLine ?? ""));
+                    break;
+                case { ValueKind: JsonValueKind.Array } list:
+                    foreach (var a in list.EnumerateArray()) if (a.ValueKind == JsonValueKind.String) s.TerminalCommand.Add(a.GetString()!);
+                    break;
+            }
             s.VncViewer = VncViewers.Parse(file.VncViewer) ?? VncViewerKind.Auto;
             foreach (var a in file.VncCommand ?? []) if (a is not null) s.VncCommand.Add(a);
             s.LastServerId = file.LastServer;
+            s.RefreshSeconds = file.RefreshSeconds is int r && r >= 0 ? r : DefaultRefreshSeconds;
             foreach (var d in file.Servers ?? [])
             {
                 if (d is null) continue;
@@ -146,9 +169,13 @@ public sealed class LauncherSettings
         {
             Version = 1,
             Terminal = FormatTerminal(Terminal),
+            TerminalCommand = TerminalCommandLine is { } line ? JsonSerializer.SerializeToElement(line, LauncherJson.Default.String)
+                : TerminalCommand.Count > 0 ? JsonSerializer.SerializeToElement(TerminalCommand, LauncherJson.Default.ListString)
+                : null,
             VncViewer = VncViewers.Id(VncViewer),
             VncCommand = VncCommand.Count > 0 ? [.. VncCommand] : null,
             LastServer = LastServerId,
+            RefreshSeconds = RefreshSeconds,
             Servers = Servers.Select(s => (ServerEntry?)new ServerEntry
             {
                 Id = s.Id,
@@ -174,6 +201,8 @@ public sealed class LauncherSettings
         "wt" => TerminalHost.WindowsTerminal,
         "wt-preview" => TerminalHost.WindowsTerminalPreview,
         "conhost" => TerminalHost.Conhost,
+        "mintty" => TerminalHost.Mintty,
+        "custom" => TerminalHost.Custom,
         _ => TerminalHost.Auto,
     };
 
@@ -183,6 +212,8 @@ public sealed class LauncherSettings
         TerminalHost.WindowsTerminal => "wt",
         TerminalHost.WindowsTerminalPreview => "wt-preview",
         TerminalHost.Conhost => "conhost",
+        TerminalHost.Mintty => "mintty",
+        TerminalHost.Custom => "custom",
         _ => "auto",
     };
 
@@ -190,9 +221,11 @@ public sealed class LauncherSettings
     {
         public int Version { get; set; }
         public string? Terminal { get; set; }
+        public JsonElement? TerminalCommand { get; set; }
         public string? VncViewer { get; set; }
         public List<string?>? VncCommand { get; set; }
         public string? LastServer { get; set; }
+        public int? RefreshSeconds { get; set; }
         public List<ServerEntry?>? Servers { get; set; }
     }
 
@@ -213,4 +246,6 @@ public sealed class LauncherSettings
     ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(LauncherSettings.SettingsFile))]
+[JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(List<string>))]
 internal sealed partial class LauncherJson : JsonSerializerContext;

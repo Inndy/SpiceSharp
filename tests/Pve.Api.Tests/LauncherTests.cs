@@ -108,7 +108,9 @@ public class LauncherTests
     public static TheoryData<TerminalHost, string> TerminalCases()
     {
         var data = new TheoryData<TerminalHost, string>();
-        foreach (var host in Enum.GetValues<TerminalHost>())
+        // The Windows Terminal and console choices; mintty and a custom command don't depend on the Windows Terminal
+        // scan and have their own tests (TerminalChoiceTests).
+        foreach (var host in Enum.GetValues<TerminalHost>().Where(h => h is not (TerminalHost.Mintty or TerminalHost.Custom)))
             foreach (string machine in Machines) data.Add(host, machine);
         return data;
     }

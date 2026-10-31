@@ -25,3 +25,19 @@
   the host name is not checked, since only the holder of that key can present it. This covers DNS aliases, reverse
   proxies and addresses missing from the certificate.
 - A pinned PEM is a CA when its basic constraints say CA=true, otherwise it is treated as a leaf.
+- Implemented 2026-10-31 (agent; details spec silent, not yet reviewed):
+  - `Pve.Term.PveTls`, used by the launcher's API client and by PveTerm (termproxy and VNC), splits the pinned PEM:
+    each certificate whose basic constraints say CA=true is a root, every other one is a pinned leaf.
+  - The presented certificate is compared byte for byte with each pinned leaf first. A match is accepted without the
+    host name or chain checks, but only within the pinned certificate's validity dates: the pinned-CA path already
+    refused a certificate outside them (the chain build checks time), so the leaf path keeps that rule. A PEM with
+    both kinds keeps both rules; a presented certificate that matches no leaf falls through to the CA rule, and with
+    no CA in the PEM it is refused ("not the pinned certificate").
+  - `tools/pve-vv.py` (`PVE_CA_FILE`) does the same for its own requests: a file with a CA uses only its CAs (hostname
+    checked); a file without one pins its certificates exactly, checked right after the handshake inside
+    `wrap_socket`, before any request goes out. A file holding both kinds uses only the CAs there (a dev helper; the
+    descriptor it hands PveTerm still carries the whole PEM).
+  - The launcher's field is "CA or server certificate to pin"; the README says a pinned server certificate must be
+    pasted again when it renews.
+  - Amended after review R2 ([../reviews/2026-10-31-launcher-answers.md](../reviews/2026-10-31-launcher-answers.md)):
+    `tools/pve-vv.py` reads UTCTime with X.509's century rule and checks a pinned leaf's dates at every handshake.
