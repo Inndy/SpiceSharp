@@ -16,3 +16,12 @@
 - **Reason:**
   - A pinned CA is the strongest trust when the user has one, for example Proxmox's self-signed cluster CA.
   - System trust covers servers behind a public certificate (ACME) without extra setup.
+
+## Amendment (the human, 2026-10-31, through agentdesk): a pinned leaf certificate skips the host check
+
+- Decided by: the human (2026-10-31): "Pin CA -> verify host / Pin terminal cert -> ignore host validation".
+- A pinned CA keeps the host check: the chain must end at the pinned CA and the certificate must name the host.
+- A pinned end-entity (leaf) certificate is matched exactly (the presented leaf must be that certificate), and then
+  the host name is not checked, since only the holder of that key can present it. This covers DNS aliases, reverse
+  proxies and addresses missing from the certificate.
+- A pinned PEM is a CA when its basic constraints say CA=true, otherwise it is treated as a leaf.
