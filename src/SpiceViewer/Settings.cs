@@ -162,6 +162,25 @@ sealed class OffByDefaultConverter : JsonConverter<bool>
     public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options) => writer.WriteBooleanValue(value);
 }
 
+/// <summary>
+/// Reads an on-by-default switch leniently: <c>false</c> (or the string "false") is off; anything else, including a
+/// value of another type, is on instead of making the whole file unusable. A missing key keeps the property's default.
+/// </summary>
+sealed class OnByDefaultConverter : JsonConverter<bool>
+{
+    public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        switch (reader.TokenType)
+        {
+            case JsonTokenType.False: return false;
+            case JsonTokenType.String: return !string.Equals(reader.GetString()?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+            default: reader.Skip(); return true;
+        }
+    }
+
+    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options) => writer.WriteBooleanValue(value);
+}
+
 /// <summary>settings.json: global preferences and the remembered window of each VM. See `docs/decisions/`.</summary>
 sealed class ViewerSettings
 {
@@ -183,6 +202,12 @@ sealed class ViewerSettings
     /// <summary>Video codec order asked of the server (docs/decisions/0037).</summary>
     [JsonConverter(typeof(VideoCodecModeConverter))]
     public VideoCodecMode VideoCodec { get; set; } = VideoCodecMode.Auto;
+    /// <summary>
+    /// Trim Linux guest padding: infer a Linux guest's monitor from its full-frame draws when the server names the whole
+    /// padded surface (docs/decisions/0035, finding L16). On by default; a file without the key reads as on.
+    /// </summary>
+    [JsonConverter(typeof(OnByDefaultConverter))]
+    public bool TrimGuestPadding { get; set; } = true;
     /// <summary>Keyed by <see cref="SettingsStore.VmKey"/>.</summary>
     public Dictionary<string, VmWindowState> Vms { get; set; } = new(StringComparer.Ordinal);
 }

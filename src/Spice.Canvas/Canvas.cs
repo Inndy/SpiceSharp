@@ -40,10 +40,62 @@ public sealed class Canvas : IDisposable
     /// The part of <see cref="Primary"/> the guest shows as its monitor, in surface pixels: the first head on surface 0 of
     /// the last DISPLAY_MONITORS_CONFIG, clamped to the surface, or the whole surface when there is none (e.g. a qxl
     /// surface of 640x512 behind a 640x480 mode). A primary surface recreated at the same size keeps the last head.
-    /// Empty while there is no primary surface. Read under <see cref="Sync"/>.
-    /// See docs/decisions/0035.
+    /// With <see cref="InferPaddedMonitor"/> and a Linux agent, a whole-surface area can be narrowed to the guest's own full-frame draws
+    /// (a qxl KMS guest whose config spice-server reset to the surface). Empty while there is no primary surface. Read
+    /// under <see cref="Sync"/>. See docs/decisions/0035.
     /// </summary>
     public SpiceRect PrimaryArea { get; private set; }
+    /// <summary>
+    /// Whether the guest's agent is a Linux one (it announces LF line endings; a Windows agent never does), set by the
+    /// session. A monitor that no config names is inferred only for such a guest, and only while
+    /// <see cref="InferPaddedMonitor"/> is on. Any thread.
+    /// </summary>
+    public bool GuestAgentIsLinux { get => Volatile.Read(ref _agentLinux); set => Volatile.Write(ref _agentLinux, value); }
+    bool _agentLinux;
+    /// <summary>
+    /// The user's setting "Trim Linux guest padding" (on by default): whether a monitor that no config names may be
+    /// inferred from the guest's draws, for a guest with <see cref="GuestAgentIsLinux"/>. Only a draw after the
+    /// surface's MARK that starts at the origin, is drawn whole (no clip, or one clip rectangle equal to its box), holds
+    /// every guest draw since the MARK and leaves fewer than <see cref="MaxInferredPadding"/> rows and columns of the
+    /// surface uncovered narrows the area, and only while the area is the whole surface; a later draw outside it gives
+    /// the whole surface back for the rest of that surface's life. Turning it off gives the configs' area back at once
+    /// (and announces it); turning it on takes effect at the guest's next qualifying draw. Any thread.
+    /// Finding L16 (docs/verification/2026-10-31-ubuntu-monitor-area.md, docs/decisions/0035).
+    /// </summary>
+    public bool InferPaddedMonitor
+    {
+        get => Volatile.Read(ref _inferPadded);
+        set
+        {
+            lock (Sync)
+            {
+                if (Volatile.Read(ref _inferPadded) == value) return;
+                Volatile.Write(ref _inferPadded, value);
+                if (value) return;
+                // Nothing inferred may stay: not the shown area, nor one kept for a recreated surface (whose configured
+                // head, ID included, takes its place: review MI4).
+                if (_keptHeadInferred)
+                {
+                    _hasKeptHead = _keptHasConfigHead;
+                    _keptHead = _keptConfigHead;
+                    _keptHeadInferred = false;
+                }
+                if (!_headInferred || Primary is not { } p) { _headInferred = false; return; }
+                _headInferred = false;
+                _hasHead = _hasConfigHead;
+                _head = _configHead;
+                UpdatePrimaryArea();
+                Log.Info($"canvas: monitor area {PrimaryArea} of the {p.Width}x{p.Height} primary surface: trimming Linux guest padding was turned off");
+                PrimaryChanged?.Invoke(p);
+            }
+        }
+    }
+    bool _inferPadded = true;
+    bool InferenceEnabled => GuestAgentIsLinux && InferPaddedMonitor;
+    /// <summary>
+    /// Padding the qxl KMS driver's surfaces have shown (640x480 on 640x512, 1600x900 on 1600x960) stays below this.
+    /// </summary>
+    public const int MaxInferredPadding = 64;
     /// <summary>
     /// The monitor ID of the head behind <see cref="PrimaryArea"/>, or 0 when the whole surface is shown: the display ID
     /// absolute mouse positions carry, as spice-gtk sends its shown monitor's ID (a sole head can be #1 after the server
@@ -52,9 +104,10 @@ public sealed class Canvas : IDisposable
     public uint PrimaryMonitorId => (uint)Volatile.Read(ref _monitorId);
     /// <summary>
     /// Whether <see cref="PrimaryArea"/> comes from a monitors config, rather than being the provisional whole surface
-    /// shown until one arrives after a new primary surface. Read under <see cref="Sync"/>.
+    /// shown until one arrives after a new primary surface (or, with <see cref="InferPaddedMonitor"/>, until the guest's
+    /// draws narrow a whole-surface area). Read under <see cref="Sync"/>.
     /// </summary>
-    public bool PrimaryAreaIsMonitor => Primary is not null && _hasHead;
+    public bool PrimaryAreaIsMonitor => Primary is { } p && _hasHead && !(InferenceEnabled && InferenceOpen(p));
     int _monitorId;
     // The head behind PrimaryArea, as sent (a lone head moved to the origin). When the primary surface goes, it is kept
     // with that surface's size until the next primary surface: one of the same size gets it back (a guest waking its
@@ -65,6 +118,18 @@ public sealed class Canvas : IDisposable
     bool _hasKeptHead;
     MonitorHead _keptHead;
     int _keptWidth, _keptHeight;
+    // An inferred head (_head came from the guest's draws, not a config), what the configs said before it (given back
+    // if the guest draws outside it), whether the primary surface has had its MARK (draws before it are spice-server's
+    // image of the whole surface, not the guest's), and whether inference is over for this surface.
+    bool _headInferred, _keptHeadInferred;
+    bool _hasConfigHead, _keptHasConfigHead;
+    MonitorHead _configHead, _keptConfigHead;
+    bool _primaryMarked, _inferenceClosed, _configSeen;
+    // How far right and down the guest has drawn on the primary surface since its MARK.
+    int _drawnRight, _drawnBottom;
+
+    /// <summary>The area is the whole surface and the guest's draws may still narrow it.</summary>
+    bool InferenceOpen(Surface p) => !_inferenceClosed && !_headInferred && PrimaryArea == p.Bounds;
 
     /// <summary>Before the primary surface goes: remembers its head and size for the next primary surface.</summary>
     void KeepHead()
@@ -72,6 +137,10 @@ public sealed class Canvas : IDisposable
         if (Primary is not { } p) return; // nothing shown: keep what an earlier destroy kept
         _hasKeptHead = _hasHead;
         _keptHead = _head;
+        _keptHeadInferred = _hasHead && _headInferred;
+        // The configs' head behind an inferred one, so a recreated surface can still fall back to it (review MI4).
+        _keptHasConfigHead = _hasConfigHead;
+        _keptConfigHead = _configHead;
         _keptWidth = p.Width; _keptHeight = p.Height;
     }
     public Dictionary<string, int> Stats { get; } = [];
@@ -161,12 +230,31 @@ public sealed class Canvas : IDisposable
                     // A primary surface recreated at the size the last head was shown on (a guest waking its display
                     // sends SURFACE_CREATE and draws, but no MONITORS_CONFIG) gets that head back; any other size starts
                     // from the whole surface until its config arrives (docs/decisions/0035).
-                    _hasHead = _hasKeptHead && _keptWidth == s.Width && _keptHeight == s.Height;
+                    bool sameSize = _keptWidth == s.Width && _keptHeight == s.Height;
+                    _hasHead = _hasKeptHead && sameSize;
                     _head = _keptHead;
+                    _headInferred = _hasHead && _keptHeadInferred;
+                    // The configured head (behind an inferred one, or the shown one) comes back with it, ID included.
+                    _hasConfigHead = _headInferred ? _keptHasConfigHead : _hasHead;
+                    _configHead = _headInferred ? _keptConfigHead : _head;
+                    // An inferred head comes back only while inference is still allowed; otherwise its configured one.
+                    if (_headInferred && !InferenceEnabled)
+                    {
+                        _headInferred = false;
+                        _hasHead = _hasConfigHead;
+                        _head = _configHead;
+                    }
                     _hasKeptHead = false;
+                    _configSeen = false;
+                    _primaryMarked = _inferenceClosed = false;
+                    _drawnRight = _drawnBottom = 0;
                     PrimaryArea = _hasHead ? AreaOf(_head, s.Width, s.Height) : s.Bounds;
                     Volatile.Write(ref _monitorId, _hasHead ? (int)_head.Id : 0);
-                    if (_hasHead) Log.Info($"canvas: monitor area {PrimaryArea} kept for the recreated {s.Width}x{s.Height} primary surface");
+                    // Logged for every new primary surface (connect, mode change, wake), so the log tells where the
+                    // shown area came from.
+                    Log.Info(_hasHead
+                        ? $"canvas: monitor area {PrimaryArea} kept{(_headInferred ? " (inferred from draws)" : "")} for the recreated {s.Width}x{s.Height} primary surface"
+                        : $"canvas: monitor area {PrimaryArea}, the whole new {s.Width}x{s.Height} primary surface until a monitors config names the monitor");
                     PrimaryChanged?.Invoke(s);
                     Invalidated?.Invoke(s.Bounds);
                 }
@@ -189,12 +277,42 @@ public sealed class Canvas : IDisposable
                 bool has = DisplayParse.TryPrimaryHead(payload, out var head, out int count);
                 // spice-gtk shows a lone head from the surface's origin, whatever its x/y; its position only places it
                 // among other heads on the same surface.
-                _head = count == 1 ? head with { X = 0, Y = 0 } : head;
+                var h = count == 1 ? head with { X = 0, Y = 0 } : head;
+                // The same config again (spice-server repeats it) is applied silently.
+                bool repeat = _configSeen && has == _hasConfigHead && (!has || h == _configHead);
+                _configSeen = true;
+                _hasConfigHead = has;
+                _configHead = h;
+                if (Primary is not { } p)
+                {
+                    // Nothing to show it on; a new primary surface starts from its kept head.
+                    _head = h; _hasHead = has;
+                    return;
+                }
+                // A head naming the whole surface is what spice-server substitutes when a guest creates its primary
+                // surface without sending a new config (a qxl KMS guest waking its display, finding L16): it doesn't
+                // undo an area inferred from the guest's own draws.
+                if (_headInferred && (!has || AreaOf(h, p.Width, p.Height) == p.Bounds))
+                {
+                    if (!repeat)
+                        Log.Info($"canvas: monitors config {DescribeHead(has, h, count)} names the whole {p.Width}x{p.Height} surface; keeping the monitor area {PrimaryArea} inferred from the guest's draws");
+                    return;
+                }
+                _head = h;
                 _hasHead = has;
-                UpdatePrimaryArea();
+                _headInferred = false;
+                bool changed = UpdatePrimaryArea();
+                if (changed || !repeat)
+                    Log.Info($"canvas: monitor area {PrimaryArea} of the {p.Width}x{p.Height} primary surface{(changed ? "" : ", unchanged")}, from monitors config {DescribeHead(has, h, count)}" +
+                        (InferenceEnabled && InferenceOpen(p) ? "; it names the whole surface, so the guest's first full-frame draw may narrow it" : ""));
+                if (changed) PrimaryChanged?.Invoke(p);
                 return;
             }
-            case DisplayMsg.Mode or DisplayMsg.Mark:
+            case DisplayMsg.Mark:
+                // Draws before the MARK are spice-server's image of the whole surface; the guest's own draws follow it.
+                if (Primary is not null) _primaryMarked = true;
+                return;
+            case DisplayMsg.Mode:
                 return;
             case DisplayMsg.Reset:
                 ClearCache();
@@ -227,24 +345,74 @@ public sealed class Canvas : IDisposable
     void ClearPrimary()
     {
         KeepHead();
+        Log.Info($"canvas: monitor area cleared: the {Primary!.Width}x{Primary.Height} primary surface is gone");
         Primary = null;
         _hasHead = false;
+        _headInferred = false;
         PrimaryArea = default;
         Volatile.Write(ref _monitorId, 0);
         PrimaryChanged?.Invoke(null);
     }
 
-    /// <summary>Recomputes <see cref="PrimaryArea"/> from the current head; a change is announced like a new surface.</summary>
-    void UpdatePrimaryArea()
+    /// <summary>
+    /// Recomputes <see cref="PrimaryArea"/> from the current head. Returns whether it changed; the caller logs and then
+    /// announces it like a new surface (<see cref="PrimaryChanged"/>).
+    /// </summary>
+    bool UpdatePrimaryArea()
     {
-        if (Primary is not { } p) return;
+        if (Primary is not { } p) return false;
         var area = _hasHead ? AreaOf(_head, p.Width, p.Height) : p.Bounds;
         // The ID can change without the area (head #1 replacing head #0 at the same size).
         Volatile.Write(ref _monitorId, _hasHead ? (int)_head.Id : 0);
-        if (area == PrimaryArea) return;
+        if (area == PrimaryArea) return false;
         PrimaryArea = area;
-        // Logged only when the area changes: once or twice per mode change.
-        Log.Info($"canvas: monitor area {area} of the {p.Width}x{p.Height} primary surface");
+        return true;
+    }
+
+    /// <summary>No clip, or an original clip of exactly one rectangle equal to the box (before any normalisation).</summary>
+    static bool WholeFrameClip(in DisplayBase b) =>
+        b.Clip.Type == SpiceClip.TypeNone || (b.Clip.Type == SpiceClip.TypeRects && b.Clip.Count == 1 && b.Clip[0] == b.Box);
+
+    static string DescribeHead(bool has, in MonitorHead h, int count) =>
+        has ? $"head #{h.Id} {h.Width}x{h.Height} at ({h.X},{h.Y}) of {count}" : $"with no head on surface 0 ({count} heads)";
+
+    /// <summary>
+    /// A guest draw on the primary surface, after its MARK (<see cref="InferPaddedMonitor"/>, finding L16). The qxl KMS
+    /// driver draws every frame as one copy of its whole framebuffer, the mode, onto a primary surface that can be
+    /// taller (1600x900 on 1600x960); when no config names that mode, the first such draw that holds every guest draw so
+    /// far becomes the area. A draw outside an inferred area gives the configs' area back for the rest of the surface's
+    /// life. Value arithmetic only: this runs for every draw.
+    /// </summary>
+    void NoteGuestDraw(Surface p, in SpiceRect box, in SpiceRect visible, bool candidate)
+    {
+        if (visible.Right > _drawnRight) _drawnRight = visible.Right;
+        if (visible.Bottom > _drawnBottom) _drawnBottom = visible.Bottom;
+        if (_inferenceClosed || !InferenceEnabled) return;
+        if (_headInferred)
+        {
+            var a = PrimaryArea;
+            if (visible.Left >= a.Left && visible.Top >= a.Top && visible.Right <= a.Right && visible.Bottom <= a.Bottom) return;
+            _inferenceClosed = true;
+            _headInferred = false;
+            _hasHead = _hasConfigHead;
+            _head = _configHead;
+            UpdatePrimaryArea();
+            Log.Info($"canvas: monitor area {PrimaryArea} of the {p.Width}x{p.Height} primary surface: the guest drew {visible}, outside the area inferred from its draws, so none is inferred again for this surface");
+            PrimaryChanged?.Invoke(p);
+            return;
+        }
+        // Only a draw command can be a candidate: the qxl frame comes with no clip or with an original clip of exactly
+        // one rectangle, the box itself (as captured live; review MI2). Video only counts as a draw.
+        if (!candidate || PrimaryArea != p.Bounds || box != visible || box.Left != 0 || box.Top != 0) return;
+        int padW = p.Width - box.Right, padH = p.Height - box.Bottom;
+        if (padW < 0 || padH < 0 || padW >= MaxInferredPadding || padH >= MaxInferredPadding || (padW | padH) == 0) return;
+        // An earlier draw lies outside this candidate: reject it, but a later, larger frame may still qualify (MI3).
+        if (_drawnRight > box.Right || _drawnBottom > box.Bottom) return;
+        _head = new MonitorHead(_hasConfigHead ? _configHead.Id : 0, 0, (uint)box.Right, (uint)box.Bottom, 0, 0, 0);
+        _hasHead = true;
+        _headInferred = true;
+        UpdatePrimaryArea();
+        Log.Info($"canvas: monitor area {PrimaryArea} of the {p.Width}x{p.Height} primary surface, inferred from the guest's full-frame draw: no monitors config names a smaller monitor (spice-server names the whole surface after a guest recreates it)");
         PrimaryChanged?.Invoke(p);
     }
 
@@ -521,6 +689,7 @@ public sealed class Canvas : IDisposable
         if (rects.IsEmpty) return;
         var box = c.Base.Box;
         var visible = Bounds(rects);
+        if (_primaryMarked && ReferenceEquals(s, Primary)) NoteGuestDraw(s, box, visible, WholeFrameClip(c.Base));
 
         switch (c.Kind)
         {
@@ -822,6 +991,9 @@ public sealed class Canvas : IDisposable
                         win.Offset(-dest.Left, -dest.Top), nearest: false, flipY: !topDown);
                     foreach (var r in rects) Raster.Copy(s, r, temp.View, -win.Left, -win.Top);
                 }
+                // Video on the primary surface after its MARK is a guest draw too: it counts for containment and
+                // withdraws an inferred area it reaches outside (review MI1), but is never a candidate monitor.
+                if (_primaryMarked && ReferenceEquals(s, Primary)) NoteGuestDraw(s, dest, Bounds(rects), candidate: false);
                 if (s.IsPrimary) foreach (var r in rects) Invalidated?.Invoke(r);
             }
             finally

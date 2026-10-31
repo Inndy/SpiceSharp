@@ -255,6 +255,17 @@ public sealed partial class SpiceSession
                 while (r.Remaining >= 4) words.Add(r.U32());
                 _guestAgentCaps = CapabilitySet.FromWords(words);
                 Log.Info($"agent: guest caps {string.Join(",", words.Select(w => w.ToString("x")))}");
+                // A Linux agent (LF line endings, never a Windows one): its qxl KMS driver can leave spice-server naming
+                // the whole padded surface as the monitor, so the canvas may infer the monitor from the guest's
+                // full-frame draws (finding L16, docs/decisions/0035), unless the user turned that off
+                // (Canvas.InferPaddedMonitor). Kept once on: an agent restart is the same guest.
+                if (_guestAgentCaps.Has(VdAgent.CapGuestLineEndLf) && !_guestAgentCaps.Has(VdAgent.CapGuestLineEndCrlf) && !Canvas.GuestAgentIsLinux)
+                {
+                    Canvas.GuestAgentIsLinux = true;
+                    Log.Info(Canvas.InferPaddedMonitor
+                        ? "canvas: a Linux guest agent: a monitor no config names may be inferred from the guest's full-frame draws"
+                        : "canvas: a Linux guest agent; trimming Linux guest padding is off, so the monitor is never inferred from draws");
+                }
                 if (request) SendAgentMessage(VdAgent.AnnounceCapabilities, AnnounceCaps(request: false));
                 AgentConnectedChanged?.Invoke(true);
                 break;

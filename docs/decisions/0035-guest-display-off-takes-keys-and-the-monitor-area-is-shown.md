@@ -18,6 +18,20 @@
   reason. It is drawn on the dimmed frame, on the message image when the display was off, and, before any frame, as a
   dimmer line under the GDI-painted status.
 
+  Decided by the human on 2026-10-31 (finding L16,
+  [2026-10-31-ubuntu-monitor-area.md](../verification/2026-10-31-ubuntu-monitor-area.md)): "推算但做成設定" (infer, but
+  make it a setting). For a guest whose agent announces LF line endings, the canvas infers the monitor from the
+  guest's full-frame draws when no config names a smaller one (the "Inferred monitor" bullet below), behind the
+  window-menu setting **Scaling → Trim Linux guest padding**, saved for all VMs (`trimGuestPadding` in settings.json,
+  as decisions 0024 and 0028 keep the other window-menu settings), **on by default**; a file without the key reads as
+  on. Off, the behaviour is this record's original rule, apart from the log lines. This reverses the earlier
+  "guessing the mode from draw extents was not done": the live capture showed that after a qxl KMS guest recreates
+  its surface, spice-server itself names the whole padded surface as the monitor, on every later connect, so a config
+  can't be relied on. Known cost, accepted with the setting: a Linux guest whose real monitor is the whole surface can
+  be cropped by up to 63 rows or columns until it draws there (see the bullet). The canvas also logs every new primary
+  surface, every config that changes the area or is the first for its surface, an inference, its withdrawal and every
+  clear. The windowed re-test is still pending.
+
 - **Context:** two findings of the Ubuntu guest check ([2026-10-30-ubuntu.md](../verification/2026-10-30-ubuntu.md)).
   L1: with the guest's display powered down, spice-server has no primary surface and sends only SET_ACK and
   DISPLAY_MARK on the display channel; the viewer stayed at "Connecting to …" and forwarded no input (every input path
@@ -76,7 +90,33 @@
     already blank has no head to keep; when the guest wakes (SURFACE_CREATE 1600x960, draws, MARK, no config) the
     whole surface is shown, padding included, until a config arrives. Nothing in that capture names the 1600x900 mode
     (main, cursor and display channels were checked; only the later draws' extents hint at it), and guessing the mode
-    from draw extents was not done. spice-gtk shows nothing in that case.
+    from draw extents was not done. spice-gtk shows nothing in that case. (Superseded on 2026-10-31 for a Linux agent:
+    see "Inferred monitor" below.)
+  - **Inferred monitor (2026-10-31, finding L16; a setting, on by default, by the human's decision).** The qxl KMS
+    driver sends its monitors config only when its own cached head changes, and spice-server replaces its stored config
+    with one head the size of the surface whenever the guest creates a primary surface. After a display wake (same mode,
+    new surface) the guest sends nothing, so every later connect gets a 1600x960 head for the 1600x960 surface behind
+    the 1600x900 mode, and spice-gtk would show the padding too. The guest's own draws do name the mode: the driver
+    draws each frame as one copy of its whole framebuffer, (0,0)-(1600,900). So, when `Canvas.GuestAgentIsLinux` (set by
+    the session when the guest agent announces LF line endings: spice-vdagent on Linux; never a Windows agent, never
+    without an agent) and `Canvas.InferPaddedMonitor` (the setting "Trim Linux guest padding", on by default) are both
+    true, the canvas narrows a whole-surface area to the first guest draw that (a) comes after the surface's MARK
+    (before it, spice-server sends its image of the whole surface), (b) starts at (0,0) and is drawn whole (no clip, or
+    an original clip of exactly one rectangle equal to its box, judged before clip normalisation), (c) leaves 1 to 63
+    rows and columns uncovered (`MaxInferredPadding`; the observed padding is 32 and 60 rows) and (d) holds every guest
+    draw since the MARK, video frames included (only draw commands can be candidates). A candidate that fails (d) is
+    only rejected; a later, larger one may still qualify. A later draw or video frame outside the inferred area gives
+    the configs' area back and ends inference for that surface. A config naming a smaller monitor replaces an inferred
+    area; one naming the whole surface doesn't (it is what spice-server substitutes). An inferred area is kept across a
+    same-size surface like a configured one, together with the configured head behind it (its ID included), which is
+    what comes back if the inference is withdrawn or turned off. Until the guest draws, the whole surface is shown: a
+    connect to an idle, awake guest shows the padding until its next frame (any change on its screen: a clock tick, a
+    hover, a key). While inference can still narrow the area, `PrimaryAreaIsMonitor` is false, so the window's first
+    sizing follows the narrowed area. Turning the setting off while connected gives the configs' area back at once (and
+    forgets an inferred area kept for a blank guest); turning it on narrows the area at the guest's next qualifying
+    draw. Costs: a Linux guest whose real monitor is the whole surface and whose first full-width draw from the origin
+    stops within 63 rows of the bottom (a maximized window above a bottom panel, with a config equal to the surface) is
+    cropped until something draws below it; the check is a few integer comparisons per draw and allocates nothing.
   - Everything the user sees or points at follows the area: the presenter's swap chain, guest texture and uploads (read
     at the area's offset in the surface), window sizing in 1:1 and Fit (including the WM_SIZING aspect lock),
     resize-follows-window (a request matching the monitor is not repeated), client-mode mouse positions (relative to
@@ -94,8 +134,9 @@
   - A first frame that arrives before its monitors config shows the whole surface; the next notification then still
     counts as the first frame for window sizing, so the window takes the monitor's size (or keeps a remembered size)
     even when the guest follows the window.
-  - Parsing (`DisplayParse.TryPrimaryHead`) reads in place and allocates nothing; the canvas logs only when the area
-    changes. Recorded `session.json` sizes and `ReplayMatchesRecordedStats` keep the surface size.
+  - Parsing (`DisplayParse.TryPrimaryHead`) reads in place and allocates nothing; the canvas logs when the area is set
+    for a new primary surface, changed (by a config, an inference or its withdrawal) or cleared, and when a config
+    first arrives for a surface even if the area stays the same; a repeated identical config is silent. Recorded `session.json` sizes and `ReplayMatchesRecordedStats` keep the surface size.
 - **Reason:** L1: a guest that is only asleep must not look like a hung connection, and the one safe way to wake it from
   the viewer is a key. Keys before the first surface are harmless (they would reach a shown guest a moment later
   anyway), while clicks at an unseen position are not. Keeping the presenter and presenting the message costs one

@@ -25,6 +25,16 @@ can't land on something you can't see. Until the guest's display first appears, 
 "waiting for the guest's display"; this shows briefly on every connect. If it stays, the guest
 may be asleep: press a key.
 
+A Linux guest whose display has been off and back on can report its whole video buffer as its
+screen, which is a little taller than the screen itself. With the guest agent (spice-vdagent)
+running, the viewer trims the picture to the real screen as soon as the guest draws anything
+(moving over the dock, typing, the clock changing); until then a band of old content may show
+along the bottom. viewer.log says where the shown area came from ("canvas: monitor area").
+The window menu's Scaling > "Trim Linux guest padding" turns this off (it is on by default and
+saved for all VMs): turning it off shows the whole reported screen at once; turning it back on
+trims at the guest's next redraw. Turn it off if a Linux guest's bottom rows (a panel, say) go
+missing until something there changes.
+
 Settings and log
 ----------------
 SpiceViewer is portable: it keeps its settings (settings.json) and log (viewer.log) in a "data"

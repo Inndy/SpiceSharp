@@ -36,6 +36,7 @@ sealed unsafe partial class MainWindow
         _scaling = s.Scaling;
         _shortcuts = s.SystemShortcuts;
         _resizeGuest = s.ResizeGuest;
+        _trimGuestPadding = s.TrimGuestPadding;
         _serverCursor = s.ServerCursor;
         _videoPacing = s.VideoPacing;
         // The session started connecting before the settings were read; a mode change reschedules anything queued.
@@ -47,6 +48,8 @@ sealed unsafe partial class MainWindow
             session.VideoPacing = SessionPacing(_videoPacing);
             // The display channel may not be up yet; the session sends the preference once it is.
             session.FastJpeg = _fastJpeg;
+            // Off also withdraws an area inferred before the settings were read.
+            session.Canvas.InferPaddedMonitor = _trimGuestPadding;
             session.PreferredCompression = SessionCompression(_imageCompression);
             session.PreferredVideoCodecs = _videoCodec.ServerOrder();
         }
@@ -185,6 +188,18 @@ sealed unsafe partial class MainWindow
         UpdateMenuChecks();
         if (_session is { } session) session.VideoPacing = SessionPacing(mode);
         SaveSetting(s => s.VideoPacing = mode);
+    }
+
+    /// <summary>
+    /// A menu change, saved for all VMs. Off gives the running session's configured (or whole-surface) area back at once;
+    /// on narrows the area at the guest's next full-frame draw (docs/decisions/0035, finding L16).
+    /// </summary>
+    void SetTrimGuestPadding(bool on)
+    {
+        _trimGuestPadding = on;
+        UpdateMenuChecks();
+        if (_session is { } session) session.Canvas.InferPaddedMonitor = on;
+        SaveSetting(s => s.TrimGuestPadding = on);
     }
 
     /// <summary>A menu change: the next JPEG decode of the running session uses it; saved for all VMs.</summary>

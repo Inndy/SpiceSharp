@@ -24,7 +24,8 @@ sealed unsafe partial class MainWindow
         IdAbout = 0x190, IdResizeGuest = 0x1A0, IdServerCursor = 0x1B0,
         IdPacingSpacing = 0x1C0, IdPacingClock = 0x1D0, IdPacingOff = 0x1E0,
         IdFastJpeg = 0x1F0, IdCompressionAuto = 0x200, IdCompressionLz4 = 0x210,
-        IdCodecAuto = 0x220, IdCodecServer = 0x230, IdCodecMjpeg = 0x240, IdCodecH264 = 0x250, IdCodecVp9 = 0x260, IdCodecH265 = 0x270;
+        IdCodecAuto = 0x220, IdCodecServer = 0x230, IdCodecMjpeg = 0x240, IdCodecH264 = 0x250, IdCodecVp9 = 0x260, IdCodecH265 = 0x270,
+        IdTrimPadding = 0x280;
     const int IdCloseButton = 1001;
 
     readonly VvConnection _vv;
@@ -48,6 +49,8 @@ sealed unsafe partial class MainWindow
     ScalingMode _scaling = ScalingMode.Fit;
     ShortcutMode _shortcuts = ShortcutMode.Always;
     bool _resizeGuest = true;
+    // Trim Linux guest padding (docs/decisions/0035, finding L16), saved for all VMs.
+    bool _trimGuestPadding = true;
     bool _fullscreen;
     WINDOWPLACEMENT _savedPlacement;
     uint _savedStyle;
@@ -531,6 +534,7 @@ sealed unsafe partial class MainWindow
         AppendItem(scaling, IdScale1To1, "1:1 pixels");
         AppendItem(scaling, 0, null);
         AppendItem(scaling, IdResizeGuest, "Resize guest with window");
+        AppendItem(scaling, IdTrimPadding, "Trim Linux guest padding (infer the screen from full-frame draws)");
         var keys = PInvoke.CreatePopupMenu();
         AppendItem(keys, IdKeysAlways, "Always");
         AppendItem(keys, IdKeysFullscreen, "In full screen only");
@@ -594,6 +598,7 @@ sealed unsafe partial class MainWindow
         // Software profile: 1:1 only.
         PInvoke.EnableMenuItem(_scalingMenu, IdScaleFit, MENU_ITEM_FLAGS.MF_BYCOMMAND | (_presenter?.IsSoftware == true ? MENU_ITEM_FLAGS.MF_GRAYED : MENU_ITEM_FLAGS.MF_ENABLED));
         PInvoke.CheckMenuItem(_scalingMenu, IdResizeGuest, (uint)(_resizeGuest ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
+        PInvoke.CheckMenuItem(_scalingMenu, IdTrimPadding, (uint)(_trimGuestPadding ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
         uint k = _shortcuts switch { ShortcutMode.Always => IdKeysAlways, ShortcutMode.FullscreenOnly => IdKeysFullscreen, _ => IdKeysNever };
         PInvoke.CheckMenuRadioItem(_keysMenu, IdKeysAlways, IdKeysNever, k, (uint)MENU_ITEM_FLAGS.MF_BYCOMMAND);
         PInvoke.CheckMenuItem(_sysMenu, IdServerCursor, (uint)(_serverCursor == ServerCursorMode.Guest ? MENU_ITEM_FLAGS.MF_CHECKED : MENU_ITEM_FLAGS.MF_UNCHECKED));
@@ -632,6 +637,7 @@ sealed unsafe partial class MainWindow
                 SaveSetting(s => s.ResizeGuest = on);
                 return true;
             }
+            case IdTrimPadding: SetTrimGuestPadding(!_trimGuestPadding); return true;
             case IdKeysAlways: SetShortcuts(ShortcutMode.Always); return true;
             case IdKeysFullscreen: SetShortcuts(ShortcutMode.FullscreenOnly); return true;
             case IdKeysNever: SetShortcuts(ShortcutMode.Never); return true;
