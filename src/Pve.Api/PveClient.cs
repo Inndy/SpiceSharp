@@ -300,7 +300,31 @@ public sealed class PveClient : IDisposable
     /// The connection descriptor for the terminal bridge (docs/decisions/0036): the API token, or a freshly renewed
     /// ticket plus its CSRF token, and the pinned CA. PveTerm requests the termproxy session itself.
     /// </summary>
-    public async Task<TermDescriptor> CreateTermDescriptorAsync(PveVm vm, CancellationToken ct = default)
+    public Task<TermDescriptor> CreateTermDescriptorAsync(PveVm vm, CancellationToken ct = default) =>
+        CreateDescriptorAsync(vm, ConsoleKind.Terminal, ct);
+
+    /// <summary>The descriptor for the VNC bridge (docs/decisions/0043): as for the terminal, with
+    /// <c>console: vnc</c>. PveTerm requests the vncproxy session itself.</summary>
+    public Task<TermDescriptor> CreateVncDescriptorAsync(PveVm vm, CancellationToken ct = default)
+    {
+        if (vm.Type != PveGuestType.Qemu) throw new PveApiException("Only a VM has a VNC console.");
+        return CreateDescriptorAsync(vm, ConsoleKind.Vnc, ct);
+    }
+
+    /// <summary>
+    /// <c>GET /nodes/{node}/qemu/{vmid}/config</c> (<c>VM.Audit</c>): which console the VM's display offers, by
+    /// qemu-server's own rule (docs/decisions/0043).
+    /// </summary>
+    public async Task<GuestDisplay> GetDisplayAsync(string node, int vmid, CancellationToken ct = default)
+    {
+        CheckTarget(node, vmid);
+        using var doc = await SendAsync(HttpMethod.Get, $"/nodes/{node}/qemu/{vmid}/config", null, authenticated: true, ct).ConfigureAwait(false);
+        var data = Data(doc);
+        string? vga = data.ValueKind == JsonValueKind.Object && data.TryGetProperty("vga", out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        return GuestDisplays.Of(vga);
+    }
+
+    async Task<TermDescriptor> CreateDescriptorAsync(PveVm vm, ConsoleKind console, CancellationToken ct)
     {
         CheckTarget(vm.Node, vm.Vmid);
         await EnsureFreshAsync(ct).ConfigureAwait(false);
@@ -312,23 +336,27 @@ public sealed class PveClient : IDisposable
             ApiUrl = ApiUrl,
             Node = vm.Node,
             Target = vm.Type == PveGuestType.Lxc ? TermTarget.Lxc : TermTarget.Qemu,
+            Console = console,
             Vmid = vm.Vmid,
             ApiToken = token,
             AuthCookie = token is null ? ticket!.Value : null,
             CsrfToken = token is null ? ticket!.Csrf : null,
             CaPem = CaPem,
-            Title = TerminalTitle(vm),
+            Title = TerminalTitle(vm, console),
         };
         try { d.Validate(); }
-        catch (TermDescriptorException e) { throw new PveApiException("The terminal can't be opened: " + e.Message); }
+        catch (TermDescriptorException e)
+        {
+            throw new PveApiException((console == ConsoleKind.Vnc ? "The VNC console" : "The terminal") + " can't be opened: " + e.Message);
+        }
         return d;
     }
 
-    static string TerminalTitle(PveVm vm)
+    static string TerminalTitle(PveVm vm, ConsoleKind console)
     {
         string name = new(vm.Name.Where(c => !char.IsControl(c)).Take(64).ToArray());
         string title = (vm.Type == PveGuestType.Lxc ? "CT " : "VM ") + vm.Vmid + (name.Length > 0 ? " " + name : "");
-        return vm.Type == PveGuestType.Lxc ? title : title + " serial";
+        return vm.Type == PveGuestType.Lxc || console == ConsoleKind.Vnc ? title : title + " serial";
     }
 
     static void CheckTarget(string node, int vmid)

@@ -86,16 +86,55 @@ public static class TermproxyConnector
         if (d.Serial is not null) form.Add(new("serial", d.Serial));
         req.Content = new FormUrlEncodedContent(form);
         HttpResponseMessage res;
-        try { res = await http.SendAsync(req, ct).ConfigureAwait(false); }
+        // Headers only: the body is read by ReadSessionBodyAsync under its size limit, never buffered whole first.
+        try { res = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false); }
         catch (HttpRequestException e) { throw new TermConnectException(Describe("could not reach the PVE API", e, tls), e); }
         using (res)
         {
             // pveproxy puts its error text in the reason phrase, e.g. "403 Permission check failed (/vms/100, VM.Console)".
             if (res.StatusCode != HttpStatusCode.OK)
                 throw new TermConnectException($"the PVE API refused the console: {(int)res.StatusCode} {res.ReasonPhrase}");
-            var body = await res.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
-            return ParseSession(body);
+            var body = await ReadSessionBodyAsync(res, "termproxy", ct).ConfigureAwait(false);
+            try { return ParseSession(body); }
+            finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(body); }
         }
+    }
+
+    /// <summary>The largest termproxy or vncproxy answer read. A real one is a few kilobytes (user, ticket, port, and
+    /// for vncproxy the node certificate's PEM); anything bigger is refused before it is parsed (review 2026-10-31 R3).</summary>
+    internal const int SessionBodyLimit = 64 * 1024;
+
+    /// <summary>Reads a session answer's body, at most <see cref="SessionBodyLimit"/> bytes whatever Content-Length
+    /// says (chunked or dishonest lengths included); failures become <see cref="TermConnectException"/>.</summary>
+    internal static async Task<byte[]> ReadSessionBodyAsync(HttpResponseMessage res, string what, CancellationToken ct)
+    {
+        if (res.Content.Headers.ContentLength > SessionBodyLimit)
+            throw new TermConnectException($"the PVE API's {what} answer is too large.");
+        var buffer = new byte[SessionBodyLimit];
+        int length = 0;
+        try
+        {
+            await using var stream = await res.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            while (true)
+            {
+                if (length == buffer.Length)
+                {
+                    // Full: one more byte means the answer is over the limit.
+                    if (await stream.ReadAsync(new byte[1], ct).ConfigureAwait(false) > 0)
+                        throw new TermConnectException($"the PVE API's {what} answer is too large.");
+                    break;
+                }
+                int n = await stream.ReadAsync(buffer.AsMemory(length), ct).ConfigureAwait(false);
+                if (n == 0) break;
+                length += n;
+            }
+            return buffer.AsSpan(0, length).ToArray();
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException)
+        {
+            throw new TermConnectException($"the PVE API's {what} answer could not be read: {e.Message}", e);
+        }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(buffer.AsSpan(0, length)); }
     }
 
     /// <summary>Reads <c>{"data":{"user":..,"ticket":..,"port":..}}</c>; Perl's JSON may give the port as a string.</summary>
@@ -137,7 +176,7 @@ public static class TermproxyConnector
         return new TermproxySession(user, ticket, port);
     }
 
-    static void AddAuth(TermDescriptor d, Action<string, string> add, bool includeCsrf)
+    internal static void AddAuth(TermDescriptor d, Action<string, string> add, bool includeCsrf)
     {
         if (d.ApiToken is not null) add("Authorization", "PVEAPIToken=" + d.ApiToken);
         else
@@ -147,7 +186,7 @@ public static class TermproxyConnector
         }
     }
 
-    static string Describe(string what, Exception e, PveTls tls)
+    internal static string Describe(string what, Exception e, PveTls tls)
     {
         if (tls.Failure is { } f) return $"{what}: TLS: {f}.";
         for (var x = e; x is not null; x = x.InnerException)

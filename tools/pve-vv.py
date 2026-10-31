@@ -8,6 +8,10 @@ Usage: pve-vv.py <vmid> [out.vv | --config]   or   pve-vv.py --list
        pve-vv.py --term <target> [options]    start PveTerm for a termproxy console: a Windows Terminal tab when
                                               one is found, else a new console (--wt PATH, --console, --here,
                                               --hidden; see term_main below)
+       pve-vv.py --vnc <vmid> [--viewer auto|tigervnc|tightvnc|ultravnc|realvnc|none] [--keepalive S] [--wait S]
+                 [--console | --here | --hidden] [--exe PATH] [-- VIEWER COMMAND with {host} {port} {hostport} {title}]
+                                              start `PveTerm vnc` (docs/decisions/0043): the VM's VNC display through
+                                              a loopback bridge in the user's VNC viewer; same as --term vnc:<vmid>
 Every API request verifies the server the way PveTerm does (docs/decisions/0033): against the CA in the PEM file
 that an optional PVE_CA_FILE line names (relative to the token file's folder), else against the system trust store,
 with the hostname checked in both cases. No request, and so no credential, goes to an unverified server.
@@ -100,7 +104,8 @@ if sys.argv[1] == "--term-probe":
 def term_main(argv):
     """--term TARGET [--prefetch] [--wt PATH | --console | --hidden | --here] [--exe PATH] [-- COMMAND ...]
 
-    TARGET is qemu:VMID[:serialN], lxc:VMID or node:NAME. Hands PveTerm its connection descriptor through a
+    TARGET is qemu:VMID[:serialN], lxc:VMID or node:NAME, or vnc:VMID for `PveTerm vnc` (--viewer, --keepalive and
+    --wait pass through; -- COMMAND is then the viewer command, not a replacement for PveTerm). Hands PveTerm its connection descriptor through a
     named pipe that only this user (at this integrity level) can open, the same way a launcher does
     (docs/decisions/0036). The token stays inside this process and the pipe; nothing secret is printed, put on a
     command line or written to disk.
@@ -121,9 +126,15 @@ def term_main(argv):
     command = None
     rest = list(argv)
     target = rest.pop(0)
+    # vnc:VMID runs `PveTerm vnc` (docs/decisions/0043): its options pass through, and -- COMMAND is the VNC viewer
+    # command PveTerm starts (with PveTerm's {host} {port} {hostport} {title}), not a replacement for PveTerm.
+    vnc = target.startswith("vnc:")
+    vnc_args, viewer_command = [], None
     while rest:
         a = rest.pop(0)
-        if a == "--prefetch": opts["prefetch"] = True
+        if vnc and a in ("--viewer", "--keepalive", "--wait"): vnc_args += [a, rest.pop(0)]
+        elif vnc and a == "--": viewer_command = rest; break
+        elif a == "--prefetch" and not vnc: opts["prefetch"] = True
         elif a == "--hidden": opts["hidden"] = True
         elif a == "--here": opts["here"] = True
         elif a == "--console": opts["console"] = True
@@ -137,7 +148,10 @@ def term_main(argv):
     if command_given and (opts["console"] or opts["wt"]):
         raise SystemExit("--wt and --console choose the default command; they don't apply to -- COMMAND")
     host = None  # (wt.exe, name) when PveTerm opens in a Windows Terminal tab
-    if not (command_given or opts["console"] or opts["here"] or opts["hidden"]):
+    if vnc and opts["wt"]:
+        raise SystemExit("--wt does not apply to vnc: (PveTerm vnc needs no terminal; --here or --hidden keep its output here)")
+    # The VNC bridge has no use for a terminal tab: it runs in a new console (or --here / --hidden).
+    if not (command_given or opts["console"] or opts["here"] or opts["hidden"] or vnc):
         if opts["wt"]:
             # Checked before the pipe is set up; a directory is no program (review R2). lexists keeps a zero-length
             # App Execution Alias acceptable.
@@ -159,6 +173,9 @@ def term_main(argv):
     if kind == "node":
         d["node"] = spec
         path = f"/nodes/{spec}"
+    elif kind == "vnc":
+        d.update(target="qemu", console="vnc", vmid=int(spec), node=node_of(int(spec)))
+        path = f"/nodes/{d['node']}/qemu/{spec}"
     elif kind in ("qemu", "lxc"):
         vmid, _, serial = spec.partition(":")
         d["vmid"] = int(vmid)
@@ -166,7 +183,7 @@ def term_main(argv):
         if serial: d["serial"] = serial
         path = f"/nodes/{d['node']}/{kind}/{vmid}"
     else:
-        raise SystemExit("target must be qemu:VMID[:serialN], lxc:VMID or node:NAME")
+        raise SystemExit("target must be qemu:VMID[:serialN], lxc:VMID, node:NAME or vnc:VMID")
     if cfg.get("PVE_CA_FILE"):
         with open(cfg["PVE_CA_FILE"], encoding="ascii") as f:
             d["caPem"] = f.read()
@@ -308,8 +325,10 @@ def term_main(argv):
 
     exe = opts["exe"] or os.path.join(root, "src", "PveTerm", "bin", "Debug", "net10.0-windows10.0.17763.0", "PveTerm.exe")
     if command is None:
-        command = ["{exe}", "console", "--pipe", "{pipe}", "--nonce", "{nonce}"]
-        if host:
+        command = ["{exe}", "vnc" if vnc else "console", "--pipe", "{pipe}", "--nonce", "{nonce}"]
+        if vnc:
+            command += vnc_args + (["--"] + viewer_command if viewer_command is not None else [])
+        elif host:
             # As Pve.Api.TerminalLauncher: the descriptor's display name as the tab title, without the ';' that
             # Windows Terminal reads as a command separator, or quotes.
             title = {"node": f"{d['node']} shell", "lxc": f"CT {d.get('vmid')} on {d['node']}"}.get(
@@ -336,6 +355,11 @@ def term_main(argv):
 
 if sys.argv[1] == "--term":
     sys.exit(term_main(sys.argv[2:]))
+
+if sys.argv[1] == "--vnc":
+    if len(sys.argv) < 3 or not sys.argv[2].isdigit():
+        raise SystemExit("usage: pve-vv.py --vnc VMID [options] [-- VIEWER COMMAND]")
+    sys.exit(term_main([f"vnc:{sys.argv[2]}"] + sys.argv[3:]))
 
 if sys.argv[1] == "--isos":
     # ISO images on every storage that holds them (read-only).

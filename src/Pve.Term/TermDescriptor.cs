@@ -6,6 +6,10 @@ namespace Pve.Term;
 /// <summary>What a termproxy console is opened for: the node's shell, a VM's serial console or a container.</summary>
 public enum TermTarget { Node, Qemu, Lxc }
 
+/// <summary>Which console the descriptor opens: a termproxy text console (docs/decisions/0036) or a VM's VNC display
+/// through the VNC bridge (docs/decisions/0043).</summary>
+public enum ConsoleKind { Terminal, Vnc }
+
 /// <summary>Why a descriptor was rejected; the message never contains a secret.</summary>
 public sealed class TermDescriptorException(string message) : Exception(message);
 
@@ -23,6 +27,9 @@ public sealed class TermDescriptor
     public required Uri ApiUrl { get; init; }
     public required string Node { get; init; }
     public required TermTarget Target { get; init; }
+    /// <summary>JSON <c>console</c>: <c>term</c> (the default when absent) or <c>vnc</c>. A VNC descriptor targets a
+    /// qemu VM and carries no session: the bridge requests <c>vncproxy</c> itself (docs/decisions/0043).</summary>
+    public ConsoleKind Console { get; init; } = ConsoleKind.Terminal;
     public int? Vmid { get; init; }
     /// <summary>qemu only: serial0..serial3; empty lets Proxmox pick the VM's serial display.</summary>
     public string? Serial { get; init; }
@@ -47,14 +54,14 @@ public sealed class TermDescriptor
 
     public bool HasSession => TermTicket is not null;
 
-    public string DisplayName => Title ?? Target switch
+    public string DisplayName => Title ?? (Console == ConsoleKind.Vnc ? $"VM {Vmid} on {Node}" : Target switch
     {
         TermTarget.Node => $"{Node} shell",
         TermTarget.Qemu => $"VM {Vmid} {(string.IsNullOrEmpty(Serial) ? "serial" : Serial)} on {Node}",
         _ => $"CT {Vmid} on {Node}",
-    };
+    });
 
-    public override string ToString() => $"{Target} {Node}{(Vmid is int v ? "/" + v : "")} via {ApiUrl.Authority}";
+    public override string ToString() => $"{(Console == ConsoleKind.Vnc ? "vnc " : "")}{Target} {Node}{(Vmid is int v ? "/" + v : "")} via {ApiUrl.Authority}";
 
     /// <summary>The API path of the target, below /api2/json: /nodes/{node}[/qemu|/lxc/{vmid}].</summary>
     public string TargetPath => Target switch
@@ -65,6 +72,8 @@ public sealed class TermDescriptor
     };
 
     public Uri TermproxyUri => new(ApiUrl, "/api2/json" + TargetPath + "/termproxy");
+    /// <summary><c>POST /nodes/{node}/qemu/{vmid}/vncproxy</c> (qemu-server API2/Qemu.pm).</summary>
+    public Uri VncproxyUri => new(ApiUrl, "/api2/json" + TargetPath + "/vncproxy");
 
     /// <summary>wss://host:port/api2/json/.../vncwebsocket?port=P&amp;vncticket=T (pve-xtermjs main.js).</summary>
     public Uri WebSocketUri(int port, string ticket)
@@ -79,7 +88,7 @@ public sealed class TermDescriptor
         if (json.Length > MaxBytes) throw new TermDescriptorException("The connection descriptor is too large.");
         int? version = null, vmid = null, port = null;
         string? api = null, node = null, target = null, serial = null, token = null, cookie = null, csrf = null;
-        string? user = null, ticket = null, ca = null, title = null;
+        string? user = null, ticket = null, ca = null, title = null, console = null;
         var reader = new Utf8JsonReader(json, new JsonReaderOptions { MaxDepth = 4 });
         try
         {
@@ -96,6 +105,7 @@ public sealed class TermDescriptor
                     case "apiUrl": api = Str(ref reader, name); break;
                     case "node": node = Str(ref reader, name); break;
                     case "target": target = Str(ref reader, name); break;
+                    case "console": console = Str(ref reader, name); break;
                     case "vmid": vmid = Int(ref reader, name); break;
                     case "serial": serial = Str(ref reader, name); break;
                     case "apiToken": token = Str(ref reader, name); break;
@@ -126,9 +136,15 @@ public sealed class TermDescriptor
             "lxc" => TermTarget.Lxc,
             _ => throw new TermDescriptorException("target must be node, qemu or lxc."),
         };
+        var kind = console switch
+        {
+            null or "term" => ConsoleKind.Terminal,
+            "vnc" => ConsoleKind.Vnc,
+            _ => throw new TermDescriptorException("console must be term or vnc."),
+        };
         var d = new TermDescriptor
         {
-            ApiUrl = apiUri, Node = node ?? "", Target = t, Vmid = vmid, Serial = serial, ApiToken = token,
+            ApiUrl = apiUri, Node = node ?? "", Target = t, Console = kind, Vmid = vmid, Serial = serial, ApiToken = token,
             AuthCookie = cookie, CsrfToken = csrf, TermUser = user, TermTicket = ticket, TermPort = port, CaPem = ca,
             Title = title,
         };
@@ -145,6 +161,13 @@ public sealed class TermDescriptor
             if (Vmid is not null || Serial is not null) throw new TermDescriptorException("A node shell takes no vmid or serial.");
         }
         else if (Vmid is not (>= 100 and <= 999_999_999)) throw new TermDescriptorException("vmid is missing or out of range.");
+        if (Console == ConsoleKind.Vnc)
+        {
+            if (Target != TermTarget.Qemu || Serial is not null)
+                throw new TermDescriptorException("A VNC console is for a qemu VM, without serial.");
+            if (TermUser is not null || TermTicket is not null || TermPort is not null)
+                throw new TermDescriptorException("A VNC descriptor carries no session; the bridge requests vncproxy itself.");
+        }
         if (Serial is not null && (Target != TermTarget.Qemu || Serial is not ("serial0" or "serial1" or "serial2" or "serial3")))
             throw new TermDescriptorException("serial must be serial0..serial3, and only for a qemu target.");
         if ((ApiToken is null) == (AuthCookie is null))
@@ -210,6 +233,7 @@ public sealed class TermDescriptor
             w.WriteString("apiUrl", ApiUrl.GetLeftPart(UriPartial.Authority));
             w.WriteString("node", Node);
             w.WriteString("target", Target switch { TermTarget.Node => "node", TermTarget.Qemu => "qemu", _ => "lxc" });
+            if (Console == ConsoleKind.Vnc) w.WriteString("console", "vnc");
             if (Vmid is int vmid) w.WriteNumber("vmid", vmid);
             if (Serial is not null) w.WriteString("serial", Serial);
             if (ApiToken is not null) w.WriteString("apiToken", ApiToken);

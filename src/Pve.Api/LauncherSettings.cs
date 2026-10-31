@@ -1,3 +1,4 @@
+using Pve.Term;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -77,6 +78,13 @@ public sealed class LauncherSettings
     /// <summary>Stored as <c>auto</c>, <c>default</c>, <c>wt</c>, <c>wt-preview</c> or <c>conhost</c>; a missing or unknown value is
     /// <see cref="TerminalHost.Auto"/> (docs/decisions/0042).</summary>
     public TerminalHost Terminal { get; set; } = TerminalHost.Auto;
+    /// <summary>The VNC viewer (docs/decisions/0043), stored as <c>vncViewer</c>: <c>auto</c>, <c>tigervnc</c>,
+    /// <c>tightvnc</c>, <c>ultravnc</c>, <c>realvnc</c>, <c>none</c> or <c>custom</c>; missing or unknown is auto.</summary>
+    public VncViewerKind VncViewer { get; set; } = VncViewerKind.Auto;
+    /// <summary><c>vncCommand</c>: the custom viewer command as program and arguments, with <c>{host}</c>,
+    /// <c>{port}</c>, <c>{hostport}</c> and <c>{title}</c>. Edited in the file; used when <see cref="VncViewer"/> is
+    /// custom.</summary>
+    public List<string> VncCommand { get; } = [];
     public string? LastServerId { get; set; }
 
     /// <summary>Why the file was not used, for the log; null when it was read or absent.</summary>
@@ -96,6 +104,8 @@ public sealed class LauncherSettings
                 ?? throw new InvalidDataException("the file is empty");
             if (file.Version != 1) throw new InvalidDataException($"unknown version {file.Version}");
             s.Terminal = ParseTerminal(file.Terminal);
+            s.VncViewer = VncViewers.Parse(file.VncViewer) ?? VncViewerKind.Auto;
+            foreach (var a in file.VncCommand ?? []) if (a is not null) s.VncCommand.Add(a);
             s.LastServerId = file.LastServer;
             foreach (var d in file.Servers ?? [])
             {
@@ -136,6 +146,8 @@ public sealed class LauncherSettings
         {
             Version = 1,
             Terminal = FormatTerminal(Terminal),
+            VncViewer = VncViewers.Id(VncViewer),
+            VncCommand = VncCommand.Count > 0 ? [.. VncCommand] : null,
             LastServer = LastServerId,
             Servers = Servers.Select(s => (ServerEntry?)new ServerEntry
             {
@@ -178,6 +190,8 @@ public sealed class LauncherSettings
     {
         public int Version { get; set; }
         public string? Terminal { get; set; }
+        public string? VncViewer { get; set; }
+        public List<string?>? VncCommand { get; set; }
         public string? LastServer { get; set; }
         public List<ServerEntry?>? Servers { get; set; }
     }

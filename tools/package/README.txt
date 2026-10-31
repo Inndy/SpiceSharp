@@ -123,7 +123,8 @@ from the folder above it.
 
   Add          a server: its address (https://host:8006; 8006 is assumed if you give no port),
                and either a user name and realm (pam, pve, ...) for password sign-in, or an
-               API token ID (user@realm!tokenname). The token needs the VM.Console privilege.
+               API token ID (user@realm!tokenname). The token needs the VM.Console privilege,
+               and VM.Audit for "Open console" to tell SPICE from VNC (without it, SPICE).
   CA           optional. Paste the PVE CA certificate (PEM, /etc/pve/pve-root-ca.pem on any
                node) to trust that CA and nothing else. Leave it empty if the server has a
                certificate Windows already trusts (for example from Let's Encrypt). The
@@ -135,9 +136,33 @@ from the folder above it.
                A session stays signed in while you use it; after about 1 h 40 min without
                use, the next action signs in again (with a remembered password, only the
                code is asked for).
-  Open console double-click a VM, press Enter or click "Open console": its SPICE console opens
-               in SpiceViewer. The connection data goes to the viewer through a pipe, never
-               a file. A VM that is stopped or has no SPICE display shows the server's error.
+  Open console double-click a VM, press Enter or click "Open console". A VM whose display is
+               SPICE (qxl or virtio) opens in SpiceViewer; one with another display (std, the
+               default, or cirrus, vmware) opens its VNC console (below); a serial display
+               opens the terminal. The connection data goes through a pipe, never a file. A
+               VM that is stopped shows the server's error. Right-click a VM to choose
+               SPICE or VNC yourself.
+  VNC          "Open VNC console" opens a VM's VNC display in a VNC viewer you install
+               yourself. PveTerm.exe (no window) signs in to the VM's VNC server and offers
+               the session on a one-time port on 127.0.0.1; only a program running as you
+               may connect, so no password is asked. Choose the viewer at the bottom right:
+                 Automatic (the default): the first installed of TigerVNC, TightVNC,
+                   UltraVNC and RealVNC Viewer. The list shows which one it will open.
+                 TigerVNC (recommended, https://tigervnc.org): the only one of these that
+                   sends keys as scancodes (QEMU's extended key events), so every key
+                   works whatever the keyboard layout, as in SpiceViewer. The others send
+                   characters, and some keys or layouts may not arrive as typed.
+                 TightVNC 2.x, UltraVNC, RealVNC Viewer 7: work too. RealVNC Connect 8
+                   does not (it needs a RealVNC account to reach other servers).
+                 None: nothing starts; the message above the list gives the address
+                   (127.0.0.1::PORT) to connect your viewer to within a minute.
+                 Custom command: set "vncViewer": "custom" and "vncCommand" in
+                   data\launcher.json, for example
+                   "vncCommand": ["C:\\Tools\\vncviewer.exe", "{hostport}"]
+                   ({host}, {port}, {hostport} and {title} are filled in).
+               Other consoles of the VM stay open: the session is always shared. Proxmox
+               ends a VNC session after 15 idle minutes; PveTerm keeps it alive with one
+               harmless update request after 10 idle minutes.
   Terminal     "Open terminal" (or right-click) opens a VM's serial console, and a container's
                console, in your terminal through PveTerm.exe. Choose where at the bottom
                right:
@@ -189,7 +214,8 @@ Files
                              source\native (FFmpeg's pinned source tarball is downloaded by fetch.sh).
   turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
   opus.dll                   libopus (BSD-3-Clause)
-  PveTerm.exe                Proxmox text consoles in your terminal, started by the launcher (MIT)
+  PveTerm.exe                Proxmox text consoles in your terminal, and the bridge to your VNC
+                             viewer; started by the launcher (MIT)
   PveLauncher\               the PVE launcher (PveLauncher.exe, MIT) and the Windows App SDK files
                              it needs (Microsoft's license terms)
   LICENSE.txt                licenses of this program and of every component in this package

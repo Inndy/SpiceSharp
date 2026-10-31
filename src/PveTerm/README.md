@@ -69,6 +69,34 @@ Without any of them PveTerm opens in a new console. `python tools/wt_locate.py` 
 - A VM's serial port takes one client at a time. While another console (for example the web UI's) has it open,
   PveTerm connects but shows nothing until that one closes.
 
+## VNC bridge
+
+```text
+PveTerm vnc --pipe NAME --nonce HEX [--viewer auto|tigervnc|tightvnc|ultravnc|realvnc|none]
+            [--keepalive SECONDS] [--wait SECONDS] [-- COMMAND [ARG...]]
+```
+
+Opens a VM's VNC display in the user's own VNC viewer
+([decision 0043](../../docs/decisions/0043-vnc-consoles-bridge-to-the-users-vnc-viewer.md)).
+
+- The descriptor is the same as for `console`, with `"console": "vnc"` and a qemu target.
+- PveTerm requests `vncproxy`, opens `vncwebsocket` and authenticates to QEMU with the session's one-time password.
+- It then listens on a one-session port on 127.0.0.1 and starts the viewer at `127.0.0.1::PORT`.
+- Only a process of the same user, at the same or a higher integrity level, may connect. The viewer sees security
+  type None.
+- After the handshake, bytes are relayed unchanged. The only exception: after `--keepalive` idle seconds (default
+  600, `0` turns it off), PveTerm sends one incremental update request between two viewer messages, because
+  Proxmox ends a VNC session after 15 idle minutes.
+- `--viewer` picks a detected viewer; `none` prints the address instead.
+- `-- COMMAND` runs any program, with `{host}`, `{port}`, `{hostport}` and `{title}` filled in.
+- Status lines go to standard error (the launcher reads them).
+- Exit codes: 0 the session ended, 1 the connection failed, 2 bad arguments, 3 the hand-off failed, 4 no viewer
+  connected.
+
+For development: `python tools/pve-vv.py --vnc VMID [--viewer V] [--here|--hidden] [-- COMMAND]`.
+`tools/vnc-probe.py PORT` is a headless test viewer: it prints ServerInit and the first update, and sends the guest
+no input. For example: `python tools/pve-vv.py --vnc VMID --here -- python -I tools/vnc-probe.py {port}`.
+
 ## Development
 
 ```sh

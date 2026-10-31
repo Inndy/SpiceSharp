@@ -162,8 +162,10 @@ public static class TerminalLauncher
     /// <param name="exitMeansAbandoned">The started process is the bridge (or its console host), so its exit ends
     /// the hand-off; wt.exe hands the command to a running terminal and exits at once.</param>
     /// <param name="exitCodeIsBridge">The started process is PveTerm itself, so its exit code means something.</param>
+    /// <param name="started">Called once the process exists (the VNC bridge's launcher starts reading its standard
+    /// error there).</param>
     internal static async Task<Task<int?>> LaunchCoreAsync(TermDescriptor d, Func<string, string, ProcessStartInfo> startInfo,
-        bool exitMeansAbandoned, bool exitCodeIsBridge, CancellationToken ct)
+        bool exitMeansAbandoned, bool exitCodeIsBridge, CancellationToken ct, Action<Process>? started = null)
     {
         try { d.Validate(); }
         catch (TermDescriptorException e) { throw new PveApiException("The terminal can't be opened: " + e.Message); }
@@ -176,6 +178,7 @@ public static class TerminalLauncher
             try { p = Process.Start(psi); }
             catch (Win32Exception e) { throw new PveApiException($"Could not start {Path.GetFileName(psi.FileName)}: {e.Message}"); }
             if (p is null && exitMeansAbandoned) throw new PveApiException($"{Path.GetFileName(psi.FileName)} did not start.");
+            if (p is not null) started?.Invoke(p);
             Task? exited = p?.WaitForExitAsync(CancellationToken.None);
             try { await server.ServeAsync(json, HandoffTimeout, exitMeansAbandoned ? exited : null, ct).ConfigureAwait(false); }
             catch (HandoffException e)
@@ -245,4 +248,95 @@ public static class TerminalLauncher
 
     /// <summary>Windows Terminal's command-line grammar splits at an unescaped ';'; <c>\;</c> is a literal one.</summary>
     internal static string EscapeWtSeparators(string arg) => arg.Replace(";", @"\;", StringComparison.Ordinal);
+}
+
+/// <summary>How a VNC bridge session ended, for the launcher's message.</summary>
+public sealed record VncExit(int Code, string? LastStatus);
+
+/// <summary>
+/// Opens a VM's VNC console through the bridge (docs/decisions/0043): <c>PveTerm.exe vnc --pipe NAME --nonce HEX
+/// --viewer V [-- COMMAND]</c> started without a window, the descriptor served once over the same one-user pipe as
+/// the terminal, and the bridge's status lines (standard error) passed on as they come.
+/// </summary>
+public static class VncLauncher
+{
+    /// <summary>
+    /// Starts the bridge and completes once it has collected the descriptor. The returned task completes when the
+    /// bridge exits, with its exit code and last status line. A viewer the choice names but that isn't installed is
+    /// reported before anything is requested from the server.
+    /// </summary>
+    public static async Task<Task<VncExit>> LaunchAsync(TermDescriptor d, string bridgeExe, VncViewerKind viewer,
+        IReadOnlyList<string>? command, Action<string>? status = null, CancellationToken ct = default)
+    {
+        if (!File.Exists(bridgeExe)) throw new PveApiException($"{Path.GetFileName(bridgeExe)} was not found in the launcher's folder.");
+        CheckViewer(viewer, command, VncViewerProbe.System);
+        string? last = null;
+        var exited = await TerminalLauncher.LaunchCoreAsync(d, (pipe, nonce) => CreateStartInfo(bridgeExe, pipe, nonce, viewer, command),
+            exitMeansAbandoned: true, exitCodeIsBridge: true, ct, started: p =>
+            {
+                p.ErrorDataReceived += (_, e) =>
+                {
+                    if (e.Data is not { Length: > 0 } line) return;
+                    const string Prefix = "PveTerm: ";
+                    line = line.StartsWith(Prefix, StringComparison.Ordinal) ? line[Prefix.Length..] : line;
+                    Volatile.Write(ref last, line);
+                    status?.Invoke(line);
+                };
+                p.BeginErrorReadLine();
+            }).ConfigureAwait(false);
+        return Finish(exited);
+
+        async Task<VncExit> Finish(Task<int?> t)
+        {
+            int? code = await t.ConfigureAwait(false);
+            return new VncExit(code ?? -1, Volatile.Read(ref last));
+        }
+    }
+
+    /// <summary>Refuses a choice that can't work before any ticket is spent.</summary>
+    internal static void CheckViewer(VncViewerKind viewer, IReadOnlyList<string>? command, VncViewerProbe probe)
+    {
+        if (viewer == VncViewerKind.Custom && command is not { Count: > 0 })
+            throw new PveApiException("The custom VNC viewer command is empty. Set vncCommand in launcher.json, or choose another viewer.");
+        if (viewer is not (VncViewerKind.Custom or VncViewerKind.None) && VncViewers.Resolve(viewer, probe) is null)
+            throw new PveApiException(viewer == VncViewerKind.Auto
+                ? "No VNC viewer was found. Install TigerVNC (recommended), TightVNC, UltraVNC or RealVNC Viewer, or choose a custom command."
+                : $"{VncViewers.Name(viewer)} was not found. Install it, or choose another VNC viewer.");
+    }
+
+    /// <summary>The bridge without a window; its standard error is read by the launcher. Only the pipe name and nonce,
+    /// the viewer choice and a custom command (not secret) are on the command line.</summary>
+    internal static ProcessStartInfo CreateStartInfo(string bridgeExe, string pipe, string nonce, VncViewerKind viewer, IReadOnlyList<string>? command)
+    {
+        var psi = new ProcessStartInfo(bridgeExe)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            WorkingDirectory = Path.GetDirectoryName(bridgeExe) ?? "",
+        };
+        foreach (var a in new[] { "vnc", "--pipe", pipe, "--nonce", nonce }) psi.ArgumentList.Add(a);
+        if (viewer == VncViewerKind.Custom)
+        {
+            psi.ArgumentList.Add("--");
+            foreach (var a in command!) psi.ArgumentList.Add(a);
+        }
+        else
+        {
+            psi.ArgumentList.Add("--viewer");
+            psi.ArgumentList.Add(VncViewers.Id(viewer));
+        }
+        return psi;
+    }
+
+    /// <summary>What a <c>PveTerm vnc</c> exit code means (src/PveTerm/VncCommand.cs).</summary>
+    public static string DescribeExit(int code) => code switch
+    {
+        0 => "the session ended",
+        1 => "the console could not connect",
+        2 => "bad arguments",
+        3 => "the hand-off failed",
+        4 => "no VNC viewer connected",
+        _ => $"exit code {code}",
+    };
 }

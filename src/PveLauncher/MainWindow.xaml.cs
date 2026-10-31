@@ -31,6 +31,11 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     static readonly TerminalHost[] TerminalChoices =
         [TerminalHost.Auto, TerminalHost.WindowsTerminal, TerminalHost.WindowsTerminalPreview, TerminalHost.Default, TerminalHost.Conhost];
 
+    /// <summary>The VNC viewer selector's items, in order (MainWindow.xaml, docs/decisions/0043).</summary>
+    static readonly Pve.Term.VncViewerKind[] VncChoices =
+        [Pve.Term.VncViewerKind.Auto, Pve.Term.VncViewerKind.TigerVnc, Pve.Term.VncViewerKind.TightVnc, Pve.Term.VncViewerKind.UltraVnc,
+         Pve.Term.VncViewerKind.RealVnc, Pve.Term.VncViewerKind.None, Pve.Term.VncViewerKind.Custom];
+
     public ObservableCollection<ServerItem> Servers { get; } = [];
     public ObservableCollection<GuestItem> Guests { get; } = [];
 
@@ -54,6 +59,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         _loading = true;
         ShowTerminalDetection(WindowsTerminalLocator.Scan());
         TerminalChoice.SelectedIndex = Math.Max(0, Array.IndexOf(TerminalChoices, _settings.Terminal));
+        ShowVncDetection();
+        VncChoice.SelectedIndex = Math.Max(0, Array.IndexOf(VncChoices, _settings.VncViewer));
         foreach (var s in _settings.Servers) Servers.Add(new ServerItem(s));
         _loading = false;
         SizeToDpi(1120, 700);
@@ -159,6 +166,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         RefreshButton.IsEnabled = server is not null && !_busy;
         ConsoleButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
         TerminalButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
+        VncButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && guest.Vm.Type == PveGuestType.Qemu && !_busy;
         ConsoleButton.Content = guest?.Vm.Type == PveGuestType.Lxc ? "Open terminal" : "Open console";
     }
 
@@ -428,19 +436,34 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     void OnGuestMenuOpening(object sender, object e)
     {
         var guest = SelectedGuest;
-        // A container has no SPICE display; its terminal is the console.
-        MenuConsole.Visibility = guest?.Vm.Type == PveGuestType.Lxc ? Visibility.Collapsed : Visibility.Visible;
-        MenuConsole.IsEnabled = MenuTerminal.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
+        // A container has no SPICE or VNC display; its terminal is the console.
+        var vmOnly = guest?.Vm.Type == PveGuestType.Lxc ? Visibility.Collapsed : Visibility.Visible;
+        MenuConsole.Visibility = MenuSpice.Visibility = MenuVnc.Visibility = vmOnly;
+        MenuConsole.IsEnabled = MenuSpice.IsEnabled = MenuVnc.IsEnabled = MenuTerminal.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
     }
 
     void OnOpenConsole(object sender, RoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
+
+    void OnOpenSpice(object sender, RoutedEventArgs e) => Guard("Could not open the SPICE console", async () =>
+    {
+        if (SelectedGuest is { Vm.IsTemplate: false } g) await OpenSpiceAsync(g);
+    });
+
+    void OnOpenVnc(object sender, RoutedEventArgs e) => Guard("Could not open the VNC console", async () =>
+    {
+        if (SelectedGuest is { Vm.IsTemplate: false, Vm.Type: PveGuestType.Qemu } g) await OpenVncAsync(g);
+    });
 
     void OnOpenTerminal(object sender, RoutedEventArgs e) => Guard("Could not open the terminal", async () =>
     {
         if (SelectedGuest is { } g) await OpenTerminalAsync(g);
     });
 
-    /// <summary>A VM opens its SPICE console in the viewer; a container opens its terminal.</summary>
+    /// <summary>
+    /// A container opens its terminal. A VM opens what its display offers (docs/decisions/0043): SPICE in the viewer,
+    /// otherwise its VNC console in the user's VNC viewer, or its serial terminal for a serial or absent display. A
+    /// config the account can't read falls back to SPICE, the launcher's earlier default.
+    /// </summary>
     async Task OpenPrimaryAsync()
     {
         if (SelectedGuest is not { } g) return;
@@ -454,6 +477,26 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             await OpenTerminalAsync(g);
             return;
         }
+        GuestDisplay display = GuestDisplay.Spice;
+        if (!await RunAsync($"Could not read the display of {g.Label}", async c =>
+        {
+            try { display = await c.GetDisplayAsync(g.Vm.Node, g.Vm.Vmid); }
+            catch (PveApiException e) when (e is not PveAuthException)
+            {
+                LauncherLog.Write($"open: the config of {g.Label} can't be read ({e.Message}); trying SPICE");
+            }
+        })) return;
+        LauncherLog.Write($"open: {g.Label} has a {display} display");
+        switch (display)
+        {
+            case GuestDisplay.Vnc: await OpenVncAsync(g); break;
+            case GuestDisplay.Serial or GuestDisplay.None: await OpenTerminalAsync(g); break;
+            default: await OpenSpiceAsync(g); break;
+        }
+    }
+
+    async Task OpenSpiceAsync(GuestItem g)
+    {
         string viewer = Path.Combine(_home, ViewerLauncher.ExeName);
         await RunAsync($"Could not open {g.Label}", async c =>
         {
@@ -487,6 +530,66 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         int? code = await exited;
         if (code is int x && x != 0)
             ShowInfo($"The terminal of {g.Label} closed: {TerminalLauncher.DescribeExit(x)} (PveTerm exit code {x}).", InfoBarSeverity.Warning);
+    }
+
+    /// <summary>The VM's VNC console in the user's VNC viewer, through PveTerm's bridge (docs/decisions/0043).</summary>
+    async Task OpenVncAsync(GuestItem g)
+    {
+        if (g.Vm.IsTemplate || g.Vm.Type != PveGuestType.Qemu) return;
+        string bridge = Path.Combine(_home, TerminalLauncher.ExeName);
+        var viewer = _settings.VncViewer;
+        var command = _settings.VncCommand.ToArray();
+        Task<VncExit>? exited = null;
+        await RunAsync($"Could not open the VNC console of {g.Label}", async c =>
+        {
+            var d = await c.CreateVncDescriptorAsync(g.Vm);
+            // Status lines arrive on a thread-pool thread; "connect one yourself" carries the address to show.
+            exited = await VncLauncher.LaunchAsync(d, bridge, viewer, command, line =>
+            {
+                LauncherLog.Write($"vnc: {g.Label}: {line}");
+                if (line.StartsWith("Connect your VNC viewer to", StringComparison.Ordinal))
+                    _ui.TryEnqueue(() => ShowInfo($"{g.Label}: {line}"));
+            });
+            LauncherLog.Write($"vnc: {g.Label} on {g.Vm.Node} via {Pve.Term.VncViewers.Id(viewer)}");
+            ShowInfo($"Opening the VNC console of {g.Label}…");
+        });
+        if (exited is null) return;
+        // Waits on the process handle, no polling; reports a session that failed after the hand-off.
+        var result = await exited;
+        if (result.Code != 0)
+            ShowInfo($"The VNC console of {g.Label} closed: {result.LastStatus ?? VncLauncher.DescribeExit(result.Code)} (PveTerm exit code {result.Code}).",
+                InfoBarSeverity.Warning);
+    }
+
+    void OnVncChoiceChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || VncChoice.SelectedIndex < 0) return;
+        _settings.VncViewer = VncChoices[VncChoice.SelectedIndex];
+        SaveSettings();
+    }
+
+    /// <summary>Detection runs when the list opens, never on a timer: file checks and uninstall-key reads only.</summary>
+    void OnVncChoiceOpened(object sender, object e) => ShowVncDetection();
+
+    /// <summary>Labels "Automatic" with what it opens and each viewer with whether it is installed; the custom item
+    /// shows only when launcher.json has a command (or it is chosen).</summary>
+    void ShowVncDetection()
+    {
+        var found = Pve.Term.VncViewers.Scan();
+        AutoVncItem.Content = found.Count == 0 ? "Automatic (none found)" : $"Automatic ({found[0].DisplayName})";
+        Label(TigerVncItem, Pve.Term.VncViewerKind.TigerVnc, "TigerVNC (recommended)");
+        Label(TightVncItem, Pve.Term.VncViewerKind.TightVnc, "TightVNC");
+        Label(UltraVncItem, Pve.Term.VncViewerKind.UltraVnc, "UltraVNC");
+        Label(RealVncItem, Pve.Term.VncViewerKind.RealVnc, "RealVNC Viewer");
+        CustomVncItem.Visibility = _settings.VncCommand.Count > 0 || _settings.VncViewer == Pve.Term.VncViewerKind.Custom
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        void Label(ComboBoxItem item, Pve.Term.VncViewerKind kind, string name)
+        {
+            var install = found.FirstOrDefault(f => f.Kind == kind);
+            item.Content = install is null ? $"{name} (not found)" : name;
+            ToolTipService.SetToolTip(item, install?.Path);
+        }
     }
 
     void OnTerminalChoiceChanged(object sender, SelectionChangedEventArgs e)

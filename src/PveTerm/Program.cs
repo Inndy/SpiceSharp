@@ -12,7 +12,7 @@ static class Program
     const int ExitOk = 0, ExitConnect = 1, ExitUsage = 2, ExitHandoff = 3, ExitFrontEnd = 4;
 
     const string Usage = """
-        PveTerm - a Proxmox VE text console in your own terminal.
+        PveTerm - a Proxmox VE text console in your own terminal, or a VM's display in your own VNC viewer.
 
         Usage:
           PveTerm console --pipe NAME --nonce HEX [--keepalive SECONDS] [--escape CHAR|none]
@@ -22,10 +22,12 @@ static class Program
         --keepalive sets the idle time before a termproxy ping (default 240; 0 disables).
         --escape sets the escape character (default ~; not . or ?): at the start of a line, ~. quits, ~~ sends ~
         and ~? lists the escapes. 'none' turns the escape off.
-        """;
+
+        """ + VncCommand.Usage;
 
     static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "vnc") return await VncCommand.RunAsync(args);
         if (!TryParse(args, out var pipe, out var nonce, out var keepAlive, out var escape))
         {
             Console.Error.WriteLine(Usage);
@@ -38,7 +40,11 @@ static class Program
         }
 
         TermDescriptor d;
-        try { d = TermDescriptor.Parse(HandoffClient.Receive(pipe, nonce, TimeSpan.FromSeconds(30))); }
+        try
+        {
+            d = TermDescriptor.Parse(HandoffClient.Receive(pipe, nonce, TimeSpan.FromSeconds(30)));
+            if (d.Console != ConsoleKind.Terminal) throw new TermDescriptorException("this descriptor is for a VNC console; use PveTerm vnc.");
+        }
         catch (Exception e) when (e is HandoffException or TermDescriptorException)
         {
             Console.Error.WriteLine("PveTerm: " + e.Message);

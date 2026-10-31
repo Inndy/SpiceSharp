@@ -101,7 +101,9 @@
                 <!-- The row's ContextRequested selects the row under the pointer before this opens. -->
                 <ListView.ContextFlyout>
                     <MenuFlyout Opening="OnGuestMenuOpening">
-                        <MenuFlyoutItem x:Name="MenuConsole" Text="Open SPICE console" Click="OnOpenConsole" />
+                        <MenuFlyoutItem x:Name="MenuConsole" Text="Open console" Click="OnOpenConsole" />
+                        <MenuFlyoutItem x:Name="MenuSpice" Text="Open SPICE console" Click="OnOpenSpice" />
+                        <MenuFlyoutItem x:Name="MenuVnc" Text="Open VNC console" Click="OnOpenVnc" />
                         <MenuFlyoutItem x:Name="MenuTerminal" Text="Open terminal" Click="OnOpenTerminal" />
                     </MenuFlyout>
                 </ListView.ContextFlyout>
@@ -131,19 +133,36 @@
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Button x:Name="ConsoleButton" Content="Open console" Style="{StaticResource AccentButtonStyle}"
                         Click="OnOpenConsole" IsEnabled="False"
-                        ToolTipService.ToolTip="VM: SPICE console in SpiceViewer. Container: terminal. (Enter or double-click)" />
-                <Button x:Name="TerminalButton" Grid.Column="1" Content="Open terminal" Click="OnOpenTerminal" IsEnabled="False"
+                        ToolTipService.ToolTip="VM with SPICE: SpiceViewer. VM without: VNC in your VNC viewer. Container: terminal. (Enter or double-click)" />
+                <Button x:Name="VncButton" Grid.Column="1" Content="Open VNC console" Click="OnOpenVnc" IsEnabled="False"
+                        ToolTipService.ToolTip="VM: its VNC display in your own VNC viewer, through PveTerm's VNC bridge." />
+                <Button x:Name="TerminalButton" Grid.Column="2" Content="Open terminal" Click="OnOpenTerminal" IsEnabled="False"
                         ToolTipService.ToolTip="VM: serial console. Container: console. Opens in your terminal through PveTerm." />
-                <TextBlock Grid.Column="3" Text="Terminal:" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="4" Text="VNC viewer:" VerticalAlignment="Center" />
+                <!-- Items in the order of MainWindow.VncChoices; labelled from the detection when the list opens. -->
+                <ComboBox x:Name="VncChoice" Grid.Column="5" SelectionChanged="OnVncChoiceChanged"
+                          DropDownOpened="OnVncChoiceOpened" MinWidth="180">
+                    <ComboBoxItem x:Name="AutoVncItem" Content="Automatic" />
+                    <ComboBoxItem x:Name="TigerVncItem" Content="TigerVNC" />
+                    <ComboBoxItem x:Name="TightVncItem" Content="TightVNC" />
+                    <ComboBoxItem x:Name="UltraVncItem" Content="UltraVNC" />
+                    <ComboBoxItem x:Name="RealVncItem" Content="RealVNC Viewer" />
+                    <ComboBoxItem Content="None (connect one yourself)" />
+                    <ComboBoxItem x:Name="CustomVncItem" Content="Custom command (launcher.json)" />
+                </ComboBox>
+                <TextBlock Grid.Column="6" Text="Terminal:" VerticalAlignment="Center" />
                 <!-- Items in the order of MainWindow.TerminalChoices. The Windows Terminal items are labelled from the
                      detection and shown only when found (or chosen). -->
-                <ComboBox x:Name="TerminalChoice" Grid.Column="4" SelectionChanged="OnTerminalChoiceChanged"
+                <ComboBox x:Name="TerminalChoice" Grid.Column="7" SelectionChanged="OnTerminalChoiceChanged"
                           DropDownOpened="OnTerminalChoiceOpened" DropDownClosed="OnTerminalChoiceClosed" MinWidth="200">
                     <ComboBoxItem x:Name="AutoTerminalItem" Content="Automatic" />
                     <ComboBoxItem x:Name="WtTerminalItem" Content="Windows Terminal" />

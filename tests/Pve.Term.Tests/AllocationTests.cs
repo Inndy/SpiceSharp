@@ -5,7 +5,10 @@ using Xunit.Abstractions;
 
 namespace Pve.Term.Tests;
 
-/// <summary>The data path (keystrokes in, terminal output out) must not allocate per message (AGENTS.md energy rules).</summary>
+/// <summary>The data path (keystrokes in, terminal output out) must not allocate per message (AGENTS.md energy rules).
+/// Measured per thread; a window a GC ran in is discarded, and other tests running in parallel cause GCs, so these run
+/// on their own (the "Allocation profiling" collection).</summary>
+[Collection("Allocation profiling")]
 public class AllocationTests(ITestOutputHelper log)
 {
     [Fact]

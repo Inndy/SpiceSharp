@@ -42,7 +42,7 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0031](0031-the-audio-stream-outlives-its-output-device.md) | The audio stream outlives its output device (human approved the design, 2026-10-30) |
 | [0032](0032-zig-is-allowed-as-a-build-only-tool.md) | Zig is allowed as a build-only tool for vendored native libraries (human, 2026-10-30) |
 | [0033](0033-pve-api-tls-pins-a-given-ca-else-uses-system-trust.md) | The PVE API client pins a given CA, otherwise uses the system trust roots (human, 2026-10-30) |
-| [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30) |
+| [0034](0034-v1-viewer-adds-vnc-and-stays-a-separate-process.md) | In v1 the viewer also opens Proxmox VNC consoles and stays a separate process (human, 2026-10-30); VNC amended to a bridge to the user's viewer, see 0043 (human, 2026-10-31) |
 | [0035](0035-guest-display-off-takes-keys-and-the-monitor-area-is-shown.md) | A guest without a display says so and takes keys; the viewer shows the guest's monitor, not its whole surface |
 | [0036](0036-v1-terminal-bridge-to-the-users-terminal-first.md) | v1 terminal: bridge to the user's terminal first; byte-transparent console bridge, pipe hand-off, keep-alive policy (human, 2026-10-30) |
 | [0037](0037-hardware-video-decoding-h264-vp9-hevc-through-media-foundation.md) | H.264, VP9 and HEVC streams decode in hardware through Media Foundation; a codec is advertised only when decodable (human, 2026-10-31); amended the same day: H.264 the hardware refuses (4:4:4) decodes in software with libavcodec in spicecodec.dll |
@@ -51,3 +51,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0040](0040-viewers-sharing-a-data-folder-append-whole-lines-to-one-log.md) | Viewers sharing a data folder append whole lines to one viewer.log |
 | [0041](0041-idle-memory-is-trimmed-on-minimize-and-video-end.md) | Idle memory is trimmed when the window is minimized and when the last video stream ends (agent, spec silent, not yet reviewed) |
 | [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md) | The terminal choice detects Windows Terminal (default terminal app, then the wt.exe alias) and is "Automatic" by default (human, 2026-10-31) |
+| [0043](0043-vnc-consoles-bridge-to-the-users-vnc-viewer.md) | VNC consoles: a local bridge (`PveTerm vnc`) to the user's own VNC viewer; process-checked loopback port, shared session, keep-alive; supersedes the built-in client of 0034 (human, 2026-10-31) |

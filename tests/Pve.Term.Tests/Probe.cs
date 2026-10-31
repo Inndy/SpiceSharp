@@ -14,6 +14,8 @@ namespace Pve.Term.Tests;
 /// <item><c>--conpty-run COLS ROWS SCRIPT -- EXE ARGS...</c>: runs EXE under a hidden pseudoconsole and plays SCRIPT
 /// (lines <c>type TEXT</c>, <c>expect TEXT</c>, <c>resize CxR</c>, <c>sleep MS</c>, <c>close</c>; TEXT takes \r, \n,
 /// \e, \xHH escapes), then prints the rendered output. Used by <c>tools/pve-vv.py --term</c> for live checks.</item>
+/// <item><c>--relay-allocation</c>: the VNC relay's allocation measurement, in a process of its own
+/// (<see cref="VncRelayAllocationTests"/>).</item>
 /// </list>
 /// </summary>
 public static partial class Probe
@@ -21,6 +23,7 @@ public static partial class Probe
     public static int Main(string[] args)
     {
         if (args is ["--review-console-nul"]) return PveTermReviewTests.InspectConsoleNul();
+        if (args is ["--relay-allocation"]) return VncRelayAllocationTests.Run();
         if (args.Length >= 2 && args[0] == "--console-probe") return ConsoleProbe(args[1], args[2..]);
         if (args.Length >= 6 && args[0] == "--conpty-run" && args[4] == "--") return ConPtyRun(args);
         Console.Error.WriteLine("usage: --console-probe EXE ARGS... | --conpty-run COLS ROWS SCRIPT -- EXE ARGS...");
