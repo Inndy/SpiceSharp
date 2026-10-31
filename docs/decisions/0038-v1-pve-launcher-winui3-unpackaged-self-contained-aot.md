@@ -255,3 +255,7 @@
   scrubbed of the session's secrets first (`PveClient.Scrub`). Manual and automatic list fetches share a request
   counter, so only the latest started may update the list. A failed start also refreshes the list once. A follow-up
   ends as soon as its next refresh would start after 30 s.
+- Automatic refresh (the human, 2026-10-31, agentdesk D-d77a4f645c2f): renewing a password session's ticket while
+  refreshing, and asking for F5 when the session has ended, are accepted; and "最小化也繼續更新，除非系統睡著": the
+  list keeps refreshing while the window is minimized, and stops only while the system sleeps.
+- mintty (D-9ef18eff723c): "提供彈性": `launcher.json` gets a mintty path setting; empty means detect as before.
