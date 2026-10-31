@@ -185,3 +185,6 @@
   CA keeps the host check; a pinned leaf certificate is matched exactly and skips it (0033's amendment).
 - Serial terminal size (agentdesk D-6e78ed251399): both a `~r` escape that sends `stty rows R cols C` to the guest on
   demand, and an opt-in `--auto-stty` that sends it on every resize. Off by default, so the bridge stays transparent.
+- The launcher gets no `--auto-stty` setting (the human, 2026-10-31, agentdesk: "萬一要登入那自動模式也不實用":
+  at a login prompt the automatic mode would type into it). `~r` covers the launcher; `--auto-stty` stays a
+  command-line option.
