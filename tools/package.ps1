@@ -1,4 +1,5 @@
-# Builds the portable release: artifacts/SpiceViewer-<version>-<rid>.zip
+# Builds the portable release: artifacts/SpiceViewer-<version>-<rid>.zip, and the same files unzipped in out/<rid>/,
+# ready to run (its data\ folder of settings and logs is kept across builds and never zipped).
 # Usage: pwsh tools/package.ps1 [-Rid win-x64] [-NoPublish] [-NoLauncher]
 # Needs the native DLLs first (bash native/build.sh x64) and, for Native AOT on Windows, the MSVC linker.
 # The zip holds the viewer and, unless -NoLauncher, the v1 PVE launcher (PveLauncher\, with the Windows App SDK it
@@ -10,9 +11,10 @@ $proj = Join-Path $root "src/SpiceViewer/SpiceViewer.csproj"
 $termProj = Join-Path $root "src/PveTerm/PveTerm.csproj"
 $launcherProj = Join-Path $root "src/PveLauncher/PveLauncher.csproj"
 $version = ([xml](Get-Content $proj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
-$publish = Join-Path $root "out/$Rid"
-$termPublish = Join-Path $root "out/$Rid-pveterm"
-$launcherPublish = Join-Path $root "out/$Rid-launcher"
+$publish = Join-Path $root "out/publish/$Rid/viewer"
+$termPublish = Join-Path $root "out/publish/$Rid/pveterm"
+$launcherPublish = Join-Path $root "out/publish/$Rid/launcher"
+$portable = Join-Path $root "out/$Rid"
 $arch = $Rid.Split('-')[1]
 $native = Join-Path $root "native"
 $deps = Join-Path $native "downloads"
@@ -211,4 +213,10 @@ if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip
 $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
 Set-Content -Encoding ascii "$zip.sha256" "$hash  $name.zip"
+
+# out/<rid>: the zip's files, unzipped, next to the data\ folder a portable run keeps (docs/decisions/0024).
+New-Item -ItemType Directory -Force $portable | Out-Null
+Get-ChildItem -Force $portable | Where-Object { $_.Name -ne "data" } | Remove-Item -Recurse -Force
+Get-ChildItem -Force $stage | Move-Item -Destination $portable
+Remove-Item -Recurse -Force $stage
 "wrote $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 2)) MB) sha256 $hash"

@@ -38,7 +38,7 @@ directly).
 bash native/build.sh x64      # native DLLs (MSYS2 clang64 or llvm-mingw)
 dotnet build SpiceViewer.sln
 dotnet test SpiceViewer.sln   # all test projects
-pwsh tools/package.ps1        # AOT publish + release zip in artifacts/
+pwsh tools/package.ps1        # AOT publish: release zip in artifacts/, the same files ready to run in out/win-x64/
 ```
 
 ## Secrets and private details

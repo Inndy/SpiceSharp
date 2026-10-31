@@ -16,7 +16,7 @@ DLLs are built with clang from MSYS2 (or llvm-mingw on Linux), see [native/READM
 bash native/build.sh x64          # spicecodec.dll, turbojpeg.dll, opus.dll -> native/out/win-x64
 dotnet build SpiceViewer.sln
 dotnet test SpiceViewer.sln
-pwsh tools/package.ps1            # Native AOT publish + artifacts/SpiceViewer-<version>-win-x64.zip
+pwsh tools/package.ps1            # Native AOT publish + artifacts/SpiceViewer-<version>-win-x64.zip; out/win-x64/ is the same set, ready to run (keeps its data)
 ```
 
 ## Layout
