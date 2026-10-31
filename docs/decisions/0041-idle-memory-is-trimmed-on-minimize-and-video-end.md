@@ -71,3 +71,8 @@
   - its pools: at most 32 MiB of GLZ pool and 64 MiB of spare pixel buffers;
   - the driver's memory.
   No existing event says the guest went idle.
+
+## Answers (the human, 2026-10-31, through agentdesk)
+
+- Keep the trim (GLZ window, pooled pixel buffers) but drop the forced `GC.Collect`: the GC decides when to
+  collect. The record moves to Accepted when that change lands.

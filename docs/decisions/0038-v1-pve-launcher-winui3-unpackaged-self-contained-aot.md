@@ -187,3 +187,14 @@
      action changes guest state, and nothing polls.
   5. `--install` copies only the viewer. Should it also install the launcher, or should the launcher get its own
      install?
+
+## Answers (the human, 2026-10-31, through agentdesk)
+
+1. The launcher stays in the main zip.
+2. The `PveLauncher\` subfolder stays.
+4. A stopped VM gets "Start", and the VM list refreshes by itself.
+5. "我認為 viewer 先關聯自己就好，launcher 以後要「安裝」我們找其他 installer 另外打包": `--install` keeps
+   registering the viewer only; installing the launcher is left to a separate installer later.
+- Launcher technology (asked again after the WinForms/.NET 4.8 idea): WinUI 3 stays.
+- Terminals: mintty works with `MSYS=enable_pcon`; the launcher gets a mintty choice (setting that variable) and
+  custom command templates.

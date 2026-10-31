@@ -1,7 +1,7 @@
 # 0037. H.264, VP9 and HEVC streams decode in hardware through Media Foundation; a codec is advertised only when decodable
 
-- Status: Accepted (the decoding device, the codec preference default and the sync-MFT-only choice are provisional);
-  amended 2026-10-31 (software H.264, at the end)
+- Status: Accepted (the provisional details confirmed by the human, 2026-10-31); amended 2026-10-31 (software H.264,
+  and the answers, at the end)
 - Date: 2026-10-31
 - Decided by: the human (2026-10-31: H.264 + VP9 + HEVC). The details below are by agent, marked provisional where
   the human should confirm them.
@@ -249,3 +249,14 @@
   decoder for these profiles, LGPL when configured so, and fits the existing rule that LGPL code lives in the
   replaceable spicecodec.dll. Routing on the declared format keeps 4:2:0 on the GPU and costs nothing for servers that
   send it. The cost is the DLL's size, a longer native build, and CPU on the client about that of MJPEG.
+
+## Answers (the human, 2026-10-31, through agentdesk)
+
+- The provisional items (the separate decoding device, the `videoCodec` preference default, synchronous MFTs only,
+  min(4, logical processors) slice threads): "現狀可接受" (accepted as they are).
+- Without any hardware H.264 decoder (WARP, N editions without the Media Feature Pack), H.264 is still advertised
+  and decoded in software whenever `spicecodec.dll` has the FFmpeg decoder.
+- The FFmpeg tarball: "這個專案最終會開源，所以我認為沒關係。有 ffmpeg 版本與 patch (如果我們有改 source 的話) 就好".
+  The project will be open source, so the zip doesn't need the 12 MB tarball; it names the FFmpeg version, where the
+  pinned tarball comes from (with its hash), and any patch we apply.
+- `pacman -S make` in the local MSYS2: approved and installed (GNU Make 4.4.1).

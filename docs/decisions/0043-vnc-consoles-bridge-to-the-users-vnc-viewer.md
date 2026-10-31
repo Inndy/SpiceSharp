@@ -170,3 +170,15 @@
     help-center articles 360002249797 (address syntax), 360002254618 (parameters: `WarnUnencrypted`, `Shared`),
     36060594862365 (Connect 8 and third-party servers).
   - Live: [../verification/2026-10-31-vnc.md](../verification/2026-10-31-vnc.md).
+
+## Answers (the human, 2026-10-31, through agentdesk)
+
+1. No local password: the peer check (same user, same or higher integrity level) stays the only local check.
+2. Shared is always forced. On the human's question whether noVNC can take a session exclusively: noVNC's
+   `core/rfb.js` sends shared=1 by default and PVE's noVNC doesn't change it, but QEMU runs allow-exclusive under
+   PVE, so any client sending shared=0 (TigerVNC's default) would close the noVNC tab. Forcing shared=1 prevents
+   that.
+3. The 10-minute keep-alive stays.
+4. RealVNC stays in the automatic list; the order is by how usable and robust each viewer is ("按照 VNC client
+   好用與穩健性排序").
+5. "Open VNC console" stays for every qemu VM, SPICE or not.

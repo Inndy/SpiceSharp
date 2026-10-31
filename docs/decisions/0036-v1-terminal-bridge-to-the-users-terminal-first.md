@@ -176,3 +176,13 @@
     `src/PVE/APIServer/AnyEvent.pm` (`websocket_proxy`, frame limits, timeouts). All read at HEAD on git.proxmox.com.
   - Console API: `SetConsoleMode` (`ENABLE_VIRTUAL_TERMINAL_INPUT`, `DISABLE_NEWLINE_AUTO_RETURN`),
     `ReadConsoleInputW`, `CreatePseudoConsole` (Microsoft Learn).
+
+## Answers (the human, 2026-10-31, through agentdesk)
+
+- Open questions 1–4 and 6: "accept all", the current behaviour stands (PveTerm ships with the launcher; the exit
+  reset sequence; the 240 s ping; OSC 52 passes through; container and node-shell consoles stay unverified).
+- Open question 5 is reopened for discussion: the human's view is "已經 pin CA 可接受憑證與 host 不符合" (with a
+  pinned CA, a certificate that doesn't name the host is acceptable). Tracked in agentdesk; the host check stays until
+  that is settled.
+- Serial terminal size (agentdesk D-6e78ed251399): both a `~r` escape that sends `stty rows R cols C` to the guest on
+  demand, and an opt-in `--auto-stty` that sends it on every resize. Off by default, so the bridge stays transparent.
