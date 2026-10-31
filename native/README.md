@@ -12,7 +12,7 @@ tar with xz, sha256sum, NASM for x64 JPEG and H.264 SIMD, and GNU make with a PO
 for FFmpeg's own configure and make. MSYS2 packages include
 `mingw-w64-clang-x86_64-{clang,cmake,ninja,nasm}` and `make` (MSYS2 doesn't install `make`
 by default; without it build.sh stops at FFmpeg, so build on Linux as below). This machine's root is
-`~/scoop/apps/msys2/current`. Do not use clang-cl or MSVC. The MSYS2 clang64
+`~/scoop/apps/msys2/current`. For MSVC, use the separate path below. The MSYS2 clang64
 toolchain only targets x64; ARM64 DLLs are cross-built on Linux (below).
 
 Outputs: `native/out/win-x64/{spicecodec,turbojpeg,opus}.dll`, or `win-arm64`.
@@ -53,6 +53,36 @@ the SIMD functions at run time. `--enable-w32threads` is needed because
 `-O2` above. libavutil's random seed (`BCryptGenRandom`) is referenced from code the H.264
 decoder links, so spicecodec.dll imports `bcrypt.dll` (part of Windows since Vista;
 verify.py allows it for spicecodec.dll only). The decoder is otherwise unmodified.
+
+## Building with MSVC on Windows
+
+MSVC is an alternative to MinGW (decision [0046](../docs/decisions/0046-msvc-native-codecs.md)).
+Open a Visual Studio **x64 Native Tools Command Prompt**, put CMake 3.24+, Ninja and
+NASM on PATH, then launch MSYS2's `usr/bin/bash.exe` without `--login` (to inherit the
+developer environment). MSYS2 supplies GNU make, curl, tar/xz and sha256sum. Run:
+
+```sh
+bash native/build-msvc.sh x64
+python native/verify.py x64
+```
+
+For ARM64, use a developer prompt targeting ARM64 (`vcvarsall.bat x64_arm64`) and
+`bash native/build-msvc.sh arm64`. ARM64 also requires Clang on PATH, used only as
+the assembler for FFmpeg's GNU-style NEON sources (all C is compiled by MSVC). Build trees are separate (`native/build/msvc-<arch>`),
+but outputs use the same `native/out/win-<arch>` layout, replacing that architecture's
+previous DLLs. Run only one native build per architecture at a time.
+
+This path uses `cl.exe`, `lib.exe` and `link.exe`, not clang-cl. All libraries use the
+static CRT (`/MT`), `/O2`, full LTCG, function/data sections, trimmed exports, CFG,
+ASLR and NX. x64 uses `/arch:AVX2`, retains the QUIC AVX2 model update and LZCNT,
+and presumes the same Opus SIMD capabilities as the MinGW x86-64-v3 build.
+JPEG and H.264 retain NASM SIMD; ARM64 uses upstream ARM/NEON support.
+FFmpeg remains the pinned, unmodified LGPL-only H.264 decoder/parser build. MSVC
+also compiles `libavcodec/mpegutils.o`: its LTCG linker resolves H.264's debug helper
+even behind the disabled MPEG video feature check; unused code is removed at link.
+`FFmpeg-build.txt` accompanies the DLLs through managed build/publish so packaging
+can include the actual toolchain and configure arguments in LICENSE.txt.
+No VC redistributable is required. The three-DLL ABI and replacement contract are unchanged.
 
 ## Cross-building on Linux
 

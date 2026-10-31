@@ -301,3 +301,15 @@ SpiceSharp additions (MIT, not vendored):
 - `spicecodec/h264_bridge.c`: the `sc_h264_*` functions (README.md, "ABI and binding decisions").
 - `spicecodec/include/spice_codec.h`: declares them and `sc_h264_picture`.
 - `test/smoke.c`: opens a decoder, checks junk and empty input and a conversion without a picture.
+
+## MSVC portability (2026-11-01)
+
+`common/quic.c` uses MSVC LZCNT on x64 and CLZ on ARM64, and its MELCODE decoder and
+`common/quic_family_tmpl.c` use the shared leading-zero helper. The GCC/Clang intrinsic
+and AVX2 model-update path remain enabled. The MIT `shim/spice_common.h` maps GLib
+branch hints and unused annotations to portable expressions for MSVC, suppresses the
+private enum deprecation annotation unsupported by MSVC C, and uses standard offsetof.
+`shim/config.h` installs these adaptations before vendored headers.
+`common/macros.h` retains MSVC CRT constructor/destructor entries under LTCG and
+/OPT:REF by exposing and force-including their pointers; otherwise QUIC initialization
+is discarded. `spice/macros.h` recognizes `_M_ARM64` as little-endian Windows.

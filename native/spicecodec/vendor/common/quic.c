@@ -20,6 +20,7 @@
    SpiceSharp, 2026-10-30: the run-length (MELCODE) decoder counts leading one bits with __builtin_clz
      (LZCNT on x86-64-v3) instead of the lzeroes table; includes immintrin.h for the AVX2 update_model in
      quic_family_tmpl.c.
+   SpiceSharp, 2026-11-01: MSVC uses its x64/ARM64 leading-zero intrinsics; optimized paths share cnt_l_zeroes.
    Each change is marked SPICESHARP MODIFICATION below and listed in native/VENDORED.md. */
 
 // Red Hat image compression based on SFALIC by Roman Starosolski
@@ -292,7 +293,11 @@ static const BYTE lzeroes[256] = {
 static unsigned int cnt_l_zeroes(const unsigned int bits)
 {
     spice_extra_assert(bits != 0);
-#if defined(__GNUC__) && __GNUC__ >= 4
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
+    return __lzcnt(bits); /* SPICESHARP MODIFICATION: x86-64-v3 MSVC build. */
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64)
+    return _CountLeadingZeros(bits); /* SPICESHARP MODIFICATION: ARM64 CLZ. */
+#elif defined(__GNUC__) && __GNUC__ >= 4
     return __builtin_clz(bits);
 #else
     if (bits & 0xff800000) {
@@ -554,7 +559,7 @@ static int decode_state_run(Encoder *encoder, CommonState *state)
         register int temp, hits;
         /* SPICESHARP MODIFICATION: was lzeroes[(BYTE)(~(encoder->io_word >> 24))]. The low bits set
            below cap the count at 8, as the table did. */
-        temp = __builtin_clz(~encoder->io_word | 0x00FFFFFFu);/* number of leading ones in the
+        temp = cnt_l_zeroes(~encoder->io_word | 0x00FFFFFFu);/* number of leading ones in the
                                                                       input stream, up to 8 */
         for (hits = 1; hits <= temp; hits++) {
             runlen += state->melcorder;

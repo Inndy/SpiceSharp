@@ -103,6 +103,21 @@ $ffmpegNote = (@(
     "",
     "Patches: none. No FFmpeg file is modified. spicecodec.dll calls libavcodec's public API through",
     "source\native\spicecodec\h264_bridge.c, which is SpiceSharp's own file (MIT), not part of FFmpeg.")) -join "`r`n"
+# New native builds record their actual compiler and configure flags, including the MSVC path.
+# Keep the build.sh-derived notice above for older MinGW outputs without this metadata.
+$ffmpegBuild = Join-Path $publish "FFmpeg-build.txt"
+$msvcNative = $false
+if (Test-Path $ffmpegBuild) {
+    $msvcNative = (Get-Content -Raw $ffmpegBuild) -match '(?m)^Toolchain: MSVC '
+    $ffmpegNote = (@(
+        "FFmpeg's source is not included. source\native\fetch.sh downloads and checks:",
+        "  release: $($ffmpeg.Name)",
+        "  URL:     $ffmpegUrl",
+        "  SHA-256: $ffmpegHash",
+        "Build scripts: source\native\build.sh (MinGW), source\native\build-msvc.sh (MSVC).",
+        "Only libavcodec and libavutil are linked statically into spicecodec.dll (.a or MSVC .lib).",
+        (Get-Content -Raw $ffmpegBuild))) -join "`r`n"
+}
 $lic = Join-Path $root "licenses"
 $nuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME ".nuget/packages" }
 $assets = Get-Content -Raw (Join-Path $root "src/SpiceViewer/obj/project.assets.json") | ConvertFrom-Json
@@ -134,7 +149,7 @@ $components = @(
     @{ Name = "spice-protocol headers (v0.14.3)"; In = "spicecodec.dll"; License = "BSD-3-Clause (macros.h: LGPL-2.1-or-later)"
        Url = "https://gitlab.freedesktop.org/spice/spice-protocol"; Texts = @((Join-Path $lic "spice-protocol-BSD-3-Clause.txt")) },
     @{ Name = "$($ffmpeg.Name) (libavcodec H.264 decoder and libavutil; configured without GPL or nonfree parts, unmodified)"; In = "spicecodec.dll"; License = "LGPL-2.1-or-later"
-       Url = "$ffmpegUrl (SHA-256 $ffmpegHash; fetched by source\native\fetch.sh, built by source\native\build.sh)"
+       Url = "$ffmpegUrl (SHA-256 $ffmpegHash; fetched by source\native\fetch.sh; build scripts in source\native)"
        Texts = @((Join-Path $ffmpeg.FullName "LICENSE.md"), (Join-Path $ffmpeg.FullName "COPYING.LGPLv2.1"))
        Note = $ffmpegNote },
     @{ Name = "$($lz4.Name) (block decoder, lib/lz4.c)"; In = "spicecodec.dll"; License = "BSD-2-Clause"
@@ -142,12 +157,19 @@ $components = @(
     @{ Name = $jpeg.Name; In = "turbojpeg.dll"; License = "IJG, BSD-3-Clause and zlib"
        Url = "https://libjpeg-turbo.org"; Texts = @((Join-Path $jpeg.FullName "LICENSE.md"), (Join-Path $jpeg.FullName "README.ijg")) },
     @{ Name = $opus.Name; In = "opus.dll"; License = "BSD-3-Clause, with royalty-free patent licenses"
-       Url = "https://opus-codec.org"; Texts = @((Join-Path $opus.FullName "COPYING")) },
+       Url = "https://opus-codec.org"; Texts = @((Join-Path $opus.FullName "COPYING")) }
+)
+if ($msvcNative) {
+    $components += @{ Name = "Microsoft Visual C++ V14 runtime (statically linked, /MT)"; In = "spicecodec.dll, turbojpeg.dll, opus.dll"; License = "Microsoft Software License Terms"
+        Url = "https://visualstudio.microsoft.com/license-terms/ (Visual Studio Distributable Code and runtime terms)"; Texts = @((Join-Path $lic "msvc-community-2026.txt"), (Join-Path $lic "msvc-runtime-2026.txt")) }
+} else {
+    $components += @(
     @{ Name = "MinGW-w64 runtime (statically linked startup and support code)"; In = "spicecodec.dll, turbojpeg.dll, opus.dll"; License = "ZPL-2.1, public domain and others listed below"
        Url = "https://www.mingw-w64.org"; Texts = @((Join-Path $lic "mingw-w64-runtime.txt")) },
     @{ Name = "LLVM compiler-rt builtins (statically linked)"; In = "spicecodec.dll, turbojpeg.dll, opus.dll"; License = "Apache-2.0 WITH LLVM-exception"
        Url = "https://llvm.org"; Texts = @((Join-Path $lic "llvm-compiler-rt.txt")) }
-)
+    )
+}
 if ($withLauncher) {
     # The launcher's own packages (docs/decisions/0038), from its restore.
     $launcherAssets = Get-Content -Raw (Join-Path $root "src/PveLauncher/obj/project.assets.json") | ConvertFrom-Json

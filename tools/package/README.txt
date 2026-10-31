@@ -279,7 +279,7 @@ Files
   spicecodec.dll             SPICE QUIC/LZ/GLZ decoders and FFmpeg's H.264 decoder (libavcodec and
                              libavutil; LGPL-2.1-or-later), and the LZ4 decoder (BSD-2-Clause). You may
                              replace it with your own build; its full source and build scripts are in
-                             source\native. FFmpeg's source is not included: fetch.sh downloads the
+                             source\native (MinGW or MSVC; see its README.md). FFmpeg's source is not included: fetch.sh downloads the
                              pinned release, and LICENSE.txt names its URL, SHA-256 and build flags.
   turbojpeg.dll              libjpeg-turbo (IJG, BSD-3-Clause and zlib)
   opus.dll                   libopus (BSD-3-Clause)

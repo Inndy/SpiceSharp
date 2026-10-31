@@ -31,9 +31,9 @@ committed file under `native/` as `source\native`, the complete source and build
 `spicecodec.dll`. FFmpeg's source tarball is not in the zip (the human, 2026-10-31, decision 0037): `fetch.sh`
 downloads it, and the FFmpeg entry of `LICENSE.txt` names the release (9.0.2), its URL
 (`https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz`), its SHA-256
-(`8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`), the configure arguments from `build.sh`, and
+(`8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`), the actual configure arguments recorded by `build.sh` or `build-msvc.sh`, and
 the patches applied: none. `tools/package.ps1` reads the URL and hash from `fetch.sh` and the arguments from
-`build.sh`, so the notice follows them.
+the published `FFmpeg-build.txt` (legacy MinGW builds fall back to `build.sh`), so the notice follows them.
 
 | Component | In | License | Text from |
 |---|---|---|---|
@@ -48,8 +48,9 @@ the patches applied: none. `tools/package.ps1` reads the URL and hash from `fetc
 | libopus | opus.dll | BSD-3-Clause, patent licenses | `COPYING` from the pinned download |
 | lz4 (block decoder, `lib/lz4.c`) | spicecodec.dll | BSD-2-Clause | `lib/LICENSE` from the pinned download |
 | FFmpeg 9.0.2 (libavcodec H.264 decoder, libavutil; unmodified, LGPL configuration) | spicecodec.dll | LGPL-2.1-or-later | `LICENSE.md` and `COPYING.LGPLv2.1` from the pinned download |
-| MinGW-w64 runtime (static) | all three DLLs | ZPL-2.1 and others | `mingw-w64-runtime.txt` |
-| LLVM compiler-rt builtins (static) | all three DLLs | Apache-2.0 WITH LLVM-exception | `llvm-compiler-rt.txt` |
+| Microsoft Visual C++ V14 runtime (static, MSVC builds) | all three DLLs | Microsoft Software License Terms | `msvc-community-2026.txt` (Distributable Code terms) and `msvc-runtime-2026.txt`, text extracted from Microsoft's [official runtime license](https://visualstudio.microsoft.com/license-terms/vs2026-ga-visualcpp-v14-redist-runtime/) |
+| MinGW-w64 runtime (static, MinGW builds) | all three DLLs | ZPL-2.1 and others | `mingw-w64-runtime.txt` |
+| LLVM compiler-rt builtins (static, MinGW builds) | all three DLLs | Apache-2.0 WITH LLVM-exception | `llvm-compiler-rt.txt` |
 | Windows App SDK 2.5.1 components (WinUI 2.3.9, Foundation 2.3.12, InteractiveExperiences 2.1.9, Base 2.0.4; self-contained) | `PveLauncher\` except the exe and WebView2 files | Microsoft Software License Terms (distributable code) and third-party notices | `license.txt` and `NOTICE.txt` of `Microsoft.WindowsAppSDK.WinUI`, `NOTICE.txt` of `Microsoft.WindowsAppSDK.Base`, from NuGet |
 | WebView2 SDK (brought in by WinUI; unused) | `PveLauncher\WebView2Loader.dll`, `Microsoft.Web.WebView2.Core.dll` | BSD-3-Clause (Microsoft) | `LICENSE.txt` and `NOTICE.txt` of `Microsoft.Web.WebView2` from NuGet |
 | C#/WinRT runtime (`WinRT.Runtime`) | `PveLauncher.exe` | MIT | `cswinrt-MIT.txt` |

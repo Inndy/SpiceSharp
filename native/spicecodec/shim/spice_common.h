@@ -9,6 +9,15 @@
 #include <setjmp.h>
 #include <spice/macros.h>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+/* MSVC C cannot attach __declspec(deprecated) to an enum member. These headers
+   are private to the codec; no public deprecation annotation is lost. */
+#undef SPICE_GNUC_DEPRECATED
+#define SPICE_GNUC_DEPRECATED
+#undef SPICE_OFFSETOF
+#define SPICE_OFFSETOF(type, member) offsetof(type, member)
+#endif
+
 /* Fatal-path trampoline: codec_bridge.c installs a jmp_buf before every decode, so a corrupt
    stream unwinds to an error return instead of aborting the process. */
 extern _Thread_local jmp_buf *sc_fatal_env;
@@ -49,9 +58,16 @@ void sc_fatal(const char *fmt, ...);
 #define g_return_if_fail(x)  spice_return_if_fail(x)
 #define g_return_val_if_fail(x, v) spice_return_val_if_fail(x, v)
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#define G_UNLIKELY(x)        (!!(x))
+#define G_LIKELY(x)          (!!(x))
+#define G_GNUC_UNUSED
+#else
 #define G_UNLIKELY(x)        __builtin_expect(!!(x), 0)
 #define G_LIKELY(x)          __builtin_expect(!!(x), 1)
 #define G_GNUC_UNUSED        __attribute__((unused))
+#endif
 #ifndef SPICE_GNUC_UNUSED    /* spice/macros.h defines this one */
 #define SPICE_GNUC_UNUSED    __attribute__((unused))
 #endif

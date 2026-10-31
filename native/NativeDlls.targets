@@ -5,6 +5,7 @@
     <SpiceNativeDirectory>$(MSBuildThisFileDirectory)out/win-$(SpiceNativeArch)/</SpiceNativeDirectory>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="$(SpiceNativeDirectory)FFmpeg-build.txt" Condition="Exists('$(SpiceNativeDirectory)FFmpeg-build.txt')" Link="FFmpeg-build.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <_SpiceNativeDll Include="$(SpiceNativeDirectory)spicecodec.dll;$(SpiceNativeDirectory)turbojpeg.dll;$(SpiceNativeDirectory)opus.dll" />
     <Content Include="$(SpiceNativeDirectory)spicecodec.dll" Condition="Exists('$(SpiceNativeDirectory)spicecodec.dll')" Link="spicecodec.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(SpiceNativeDirectory)turbojpeg.dll" Condition="Exists('$(SpiceNativeDirectory)turbojpeg.dll')" Link="turbojpeg.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

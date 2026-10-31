@@ -56,6 +56,9 @@ cp downloads/opus-1.5.2/COPYING "$out/LICENSE.opus"
 cp downloads/libjpeg-turbo-3.1.2/LICENSE.md "$out/LICENSE.libjpeg-turbo.md"
 cp downloads/lz4-1.10.0/lib/LICENSE "$out/LICENSE.lz4"
 cp downloads/ffmpeg-9.0.2/LICENSE.md "$out/LICENSE.ffmpeg.md"
+printf 'Toolchain: MinGW Clang\nFFmpeg configure:' > "$out/FFmpeg-build.txt"
+printf ' %s' "${ff_args[@]}" >> "$out/FFmpeg-build.txt"
+printf '\nPatches: none.\n' >> "$out/FFmpeg-build.txt"
 if [[ $(uname -s) == MINGW* || $(uname -s) == MSYS* ]]; then
   if [[ $1 == x64 ]]; then "$out/codec-smoke.exe"; fi
 fi

@@ -19,6 +19,7 @@
 /* MODIFIED FILE (LGPL-2.1 section 2b). Changed from upstream spice-common common/quic_family_tmpl.c (commit 58d375e5):
    SpiceSharp, 2026-10-30: with AVX2 (x86-64-v3), update_model for 8 bits per channel updates its eight
      counters and finds the best code with vector instructions.
+   SpiceSharp, 2026-11-01: use the shared leading-zero helper for MSVC compatibility.
    Each change is marked SPICESHARP MODIFICATION below and listed in native/VENDORED.md. */
 #include <config.h>
 
@@ -95,7 +96,7 @@ static void FNAME(update_model)(CommonState *state, s_bucket * const bucket,
         m = _mm256_min_epu32(m, _mm256_shuffle_epi32(m, _MM_SHUFFLE(1, 0, 3, 2)));
         m = _mm256_min_epu32(m, _mm256_permute2x128_si256(m, m, 1));
         unsigned int mask = (unsigned int)_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpeq_epi32(c, m)));
-        bestcode = 31 - (unsigned int)__builtin_clz(mask);
+        bestcode = 31 - cnt_l_zeroes(mask);
         bestcodelen = (unsigned int)_mm_cvtsi128_si32(_mm256_castsi256_si128(m));
         (void)i;
     }

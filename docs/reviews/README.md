@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-11-01-msvc-codec.md](2026-11-01-msvc-codec.md) | MSVC native build self-review: CRT initialization, ARM64 architecture, exact ABI and PE protections, package/runtime notices, and localized header dependencies |
 | [2026-10-31-launcher-refresh-mintty.md](2026-10-31-launcher-refresh-mintty.md) | Three-commit review: sleep callback lifetime, wake/follow-up scheduling, mintty path and fallback, disabled Start guards, and offline regressions |
 | [2026-10-31-answers-followups.md](2026-10-31-answers-followups.md) | Five human-answer follow-ups: no-GC trim, software-only H.264 advertising, source notices/package contents, VNC order, serial stty escapes and offline regression |
 | [2026-10-31-launcher-answers.md](2026-10-31-launcher-answers.md) | Five-commit human-answers review: TLS leaf/CA trust, Start/task redaction, refresh concurrency/deadlines, mintty/custom commands, Python validity, and offline regressions |

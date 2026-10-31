@@ -25,6 +25,8 @@
  * GLib at ftp://ftp.gtk.org/pub/gtk/.
  */
 
+/* MODIFIED FILE (LGPL-2.1 section 2b).
+   SpiceSharp, 2026-11-01: recognize MSVC ARM64 as little-endian Windows. */
 #ifndef _H_SPICE_MACROS
 #define _H_SPICE_MACROS
 
@@ -290,7 +292,7 @@
 #if !defined(SPICE_ENDIAN) && defined(_MSC_VER)
 /* Windows support only little endian arm */
 #  if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64) \
-      || defined(_M_ARM)
+      || defined(_M_ARM) || defined(_M_ARM64)
 #    define SPICE_ENDIAN SPICE_ENDIAN_LITTLE
 #  endif
 #endif

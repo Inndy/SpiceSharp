@@ -29,6 +29,9 @@ expected = {
 }
 for name in ('spicecodec', 'turbojpeg', 'opus'):
     dll = out / (name + '.dll')
+    machine = {'win-x64': 'IMAGE_FILE_MACHINE_AMD64', 'win-arm64': 'IMAGE_FILE_MACHINE_ARM64'}[out.name]
+    headers = subprocess.check_output(['llvm-readobj', '--file-headers', str(dll)], text=True)
+    assert f'Machine: {machine} ' in headers, (dll, 'wrong architecture')
     pe = subprocess.check_output(['llvm-objdump', '-p', str(dll)], text=True)
     imports = re.findall(r'DLL Name: (\S+)', pe)
     # libavutil's random seed (BCryptGenRandom) stays linked into spicecodec.dll; bcrypt.dll is part of Windows.

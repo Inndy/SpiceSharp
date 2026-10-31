@@ -16,6 +16,9 @@
    License along with this library; if not, see <http://www.gnu.org/licenses/>.
 */
 
+/* MODIFIED FILE (LGPL-2.1 section 2b).
+   SpiceSharp, 2026-11-01: retain MSVC CRT constructor/destructor entries under LTCG and /OPT:REF.
+   x64 and ARM64 C symbols have no leading underscore. */
 #ifndef H_SPICE_COMMON_MACROS
 #define H_SPICE_COMMON_MACROS
 
@@ -31,13 +34,15 @@
     static void func_name(void); \
     static int func_name ## _wrapper(void) { func_name(); return 0; } \
     __pragma(section(".CRT$XCU",read)) \
-    __declspec(allocate(".CRT$XCU")) static int (* _array ## func_name)(void) = func_name ## _wrapper; \
+    __declspec(allocate(".CRT$XCU")) int (* _array ## func_name)(void) = func_name ## _wrapper; \
+    __pragma(comment(linker, "/include:_array" #func_name)) \
     static void func_name(void)
 #define SPICE_DESTRUCTOR_FUNC(func_name) \
     static void func_name(void); \
     static int func_name ## _wrapper(void) { func_name(); return 0; } \
     __pragma(section(".CRT$XPU",read)) \
-    __declspec(allocate(".CRT$XPU")) static int (* _array ## func_name)(void) = func_name ## _wrapper; \
+    __declspec(allocate(".CRT$XPU")) int (* _array ## func_name)(void) = func_name ## _wrapper; \
+    __pragma(comment(linker, "/include:_array" #func_name)) \
     static void func_name(void)
 #else
 #error Please implement SPICE_CONSTRUCTOR_FUNC and SPICE_DESTRUCTOR_FUNC for this compiler
