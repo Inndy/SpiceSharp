@@ -1,5 +1,8 @@
 # Documentation
 
+- [Public project overview](../README.md) / [繁體中文](../README.zh-TW.md)
+- [GitLab CI setup](ci.md): runner prerequisites, test scope and package artifacts
+
 | Folder | What it holds | Who updates it |
 |---|---|---|
 | [design/spec.md](design/spec.md) | The product spec and source of truth: goals, energy rules, architecture, milestones and their definitions of done, open questions | The human; agents only fix references |
