@@ -5,6 +5,10 @@ namespace Pve.Api;
 /// <summary>A mintty that can be started: the full path of <c>mintty.exe</c> and where it came from.</summary>
 public sealed record MinttyInstall(string Path, string DisplayName);
 
+/// <summary>Where mintty was found: <see cref="Found"/> in order of preference (the configured one first, when it
+/// exists), and <see cref="Problem"/> when a configured <c>minttyPath</c> was not used and detection took over.</summary>
+public sealed record MinttyLookup(IReadOnlyList<MinttyInstall> Found, string? Problem);
+
 /// <summary>The lookups a mintty scan makes, injectable for tests.</summary>
 public sealed class MinttyProbe
 {
@@ -24,7 +28,78 @@ public static class MinttyLocator
 {
     public const string ExeName = "mintty.exe";
 
+    /// <summary>The display name of the mintty that <c>minttyPath</c> in launcher.json names.</summary>
+    public const string ConfiguredName = "minttyPath";
+
     public static IReadOnlyList<MinttyInstall> Scan() => Scan(MinttyProbe.System);
+
+    /// <summary>
+    /// The mintty to use with the user's <c>minttyPath</c> (docs/decisions/0042, the human's answer
+    /// D-9ef18eff723c): empty or absent detects as <see cref="Scan()"/> does; a path that names an existing file (or a
+    /// folder that holds <c>mintty.exe</c>) comes first, before what detection finds; any other path is reported in
+    /// <see cref="MinttyLookup.Problem"/> and detection takes over. File checks only.
+    /// </summary>
+    public static MinttyLookup Find(string? configuredPath) => Find(configuredPath, MinttyProbe.System);
+
+    public static MinttyLookup Find(string? configuredPath, MinttyProbe probe)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPath)) return new(Scan(probe), null);
+        if (CheckPath(configuredPath, probe, out var configured) is { } problem) return new(Scan(probe), problem + "; looking for mintty as usual");
+        var found = new List<MinttyInstall> { configured! };
+        found.AddRange(Scan(probe).Where(m => !string.Equals(m.Path, configured!.Path, StringComparison.OrdinalIgnoreCase)));
+        return new(found, null);
+    }
+
+    /// <summary>
+    /// Checks a <c>minttyPath</c>: surrounding quotes and spaces are dropped and <c>%VARIABLE%</c>s expanded; it must
+    /// then be a full path to an existing file, or to a folder with <c>mintty.exe</c> in it. Returns why not, or null
+    /// with the install in <paramref name="install"/>. Any file name is accepted (a renamed or wrapped mintty).
+    /// </summary>
+    public static string? CheckPath(string configuredPath, MinttyProbe probe, out MinttyInstall? install)
+    {
+        install = null;
+        string written = configuredPath.Trim().Trim('"').Trim();
+        string path = ExpandVariables(written, probe);
+        if (path.Length == 0) return $"{ConfiguredName} is empty";
+        if (!Path.IsPathFullyQualified(path)) return $"{ConfiguredName} \"{written}\" is not a full path";
+        try { path = Path.GetFullPath(path); }
+        catch (ArgumentException) { return $"{ConfiguredName} \"{written}\" is not a valid path"; }
+        if (probe.FileExists(path)) install = new MinttyInstall(path, ConfiguredName);
+        else if (probe.FileExists(Path.Combine(path, ExeName))) install = new MinttyInstall(Path.Combine(path, ExeName), ConfiguredName);
+        else return $"{ConfiguredName} \"{written}\" was not found";
+        return null;
+    }
+
+    /// <summary><c>%NAME%</c> becomes the variable's value; an unknown one, and <c>%%</c>, stay as written.</summary>
+    internal static string ExpandVariables(string text, MinttyProbe probe)
+    {
+        if (!text.Contains('%')) return text;
+        var sb = new StringBuilder(text.Length);
+        int i = 0;
+        while (i < text.Length)
+        {
+            int start = text.IndexOf('%', i);
+            int end = start < 0 ? -1 : text.IndexOf('%', start + 1);
+            if (end < 0)
+            {
+                sb.Append(text, i, text.Length - i);
+                break;
+            }
+            sb.Append(text, i, start - i);
+            string name = text[(start + 1)..end];
+            if (name.Length > 0 && probe.GetEnv(name) is { } value)
+            {
+                sb.Append(value);
+                i = end + 1;
+            }
+            else
+            {
+                sb.Append(text, start, end - start + 1);
+                i = end + 1;
+            }
+        }
+        return sb.ToString();
+    }
 
     public static IReadOnlyList<MinttyInstall> Scan(MinttyProbe probe)
     {

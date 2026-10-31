@@ -85,6 +85,10 @@ public sealed class LauncherSettings
     public List<string> TerminalCommand { get; } = [];
     /// <summary>The command as the one string the file gave, kept so a save writes it back the same way.</summary>
     public string? TerminalCommandLine { get; set; }
+    /// <summary><c>minttyPath</c>: the mintty to use for the mintty choice, as written (a full path to the exe or its
+    /// folder, <c>%VARIABLE%</c>s allowed); null or blank detects it (<see cref="MinttyLocator.Find(string?)"/>).
+    /// Set in the window or the file.</summary>
+    public string? MinttyPath { get; set; }
     /// <summary>The VNC viewer (docs/decisions/0043), stored as <c>vncViewer</c>: <c>auto</c>, <c>tigervnc</c>,
     /// <c>tightvnc</c>, <c>ultravnc</c>, <c>realvnc</c>, <c>none</c> or <c>custom</c>; missing or unknown is auto.</summary>
     public VncViewerKind VncViewer { get; set; } = VncViewerKind.Auto;
@@ -93,7 +97,7 @@ public sealed class LauncherSettings
     /// custom.</summary>
     public List<string> VncCommand { get; } = [];
     public string? LastServerId { get; set; }
-    /// <summary><c>refreshSeconds</c>: how often the guest list refreshes by itself while the window is shown
+    /// <summary><c>refreshSeconds</c>: how often the guest list refreshes by itself while the window is open
     /// (docs/decisions/0038); 0 is off. Missing or negative is <see cref="DefaultRefreshSeconds"/>; other values are
     /// kept as written and clamped where they are used (<see cref="RefreshScheduler.Clamp"/>).</summary>
     public int RefreshSeconds { get; set; } = DefaultRefreshSeconds;
@@ -126,6 +130,7 @@ public sealed class LauncherSettings
                     foreach (var a in list.EnumerateArray()) if (a.ValueKind == JsonValueKind.String) s.TerminalCommand.Add(a.GetString()!);
                     break;
             }
+            s.MinttyPath = string.IsNullOrWhiteSpace(file.MinttyPath) ? null : file.MinttyPath.Trim();
             s.VncViewer = VncViewers.Parse(file.VncViewer) ?? VncViewerKind.Auto;
             foreach (var a in file.VncCommand ?? []) if (a is not null) s.VncCommand.Add(a);
             s.LastServerId = file.LastServer;
@@ -172,6 +177,7 @@ public sealed class LauncherSettings
             TerminalCommand = TerminalCommandLine is { } line ? JsonSerializer.SerializeToElement(line, LauncherJson.Default.String)
                 : TerminalCommand.Count > 0 ? JsonSerializer.SerializeToElement(TerminalCommand, LauncherJson.Default.ListString)
                 : null,
+            MinttyPath = string.IsNullOrWhiteSpace(MinttyPath) ? null : MinttyPath.Trim(),
             VncViewer = VncViewers.Id(VncViewer),
             VncCommand = VncCommand.Count > 0 ? [.. VncCommand] : null,
             LastServer = LastServerId,
@@ -222,6 +228,7 @@ public sealed class LauncherSettings
         public int Version { get; set; }
         public string? Terminal { get; set; }
         public JsonElement? TerminalCommand { get; set; }
+        public string? MinttyPath { get; set; }
         public string? VncViewer { get; set; }
         public List<string?>? VncCommand { get; set; }
         public string? LastServer { get; set; }

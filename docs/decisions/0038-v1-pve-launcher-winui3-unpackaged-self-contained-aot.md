@@ -159,7 +159,8 @@
     - the body is read in pieces and refused once it passes 16 MiB, length given or not;
     - an error answer is read only up to 64 KiB, for its message.
   - **Energy.** The launcher has no timer of its own (amended 2026-10-31: except the automatic refresh's one-shot
-    timer, which exists only while the window is shown and a list is up; see below):
+    timer, which exists only while the window is open (minimized included, the human's choice), the system is awake
+    and a list is up; see below):
     - the request deadline exists only while a request runs;
     - ticket renewal is lazy ([0039](0039-pve-sign-in-token-or-password-with-tfa-secrets-in-credential-manager.md));
     - the HTTP pool closes idle connections after 60 s, after which its cleanup timer stops;
@@ -223,31 +224,56 @@
     session, `GET /access/permissions?path=/vms/{vmid}` (pve-access-control `src/PVE/API2/AccessControl.pm`
     509-574, at dff26b45: anyone may read their own). The server computes that path's effective privileges itself
     (`RPCEnvironment::permissions`, the function its own check uses), so no ACL, group, pool or token-privsep rule is
-    copied here. A "no" hides Start (button and menu) and is logged; an answer that can't be had leaves it shown,
-    and the server decides when it is clicked. Errors (for example "403 Permission check failed") are shown.
+    copied here. A "no" is logged and shows Start disabled with the reason (amended 2026-10-31 by the human's
+    answer below; it was hidden before); an answer that can't be had leaves it enabled, and the server decides when
+    it is clicked. Errors (for example "403 Permission check failed") are shown.
+  - **Disabled with the reason:** the button's tooltip reads "This account lacks VM.PowerMgmt on /vms/{vmid}, which
+    Start needs", the right-click menu's item reads "Start (needs VM.PowerMgmt)", and when the answer arrives for the
+    selected guest the status bar says it once. The tooltip sits on a transparent holder around the button, since
+    WinUI shows no tooltip for a disabled control; whether the holder's does show over a disabled button wasn't
+    checked on the desktop (this change didn't have it), which is why the status bar and menu also say it.
   - The window stays usable while the task is followed; only the start request itself holds the busy state.
 - **The list refreshes by itself (answer 4)**, within the energy rules (`Pve.Api.RefreshScheduler`, unit-tested with
   a hand-moved clock; the window only reports what it can see):
   - every `refreshSeconds` (launcher.json, default 5; 0 is off; a positive value is held to 2–3600 s) while the
-    window is shown and not minimized, and a signed-in server's list is up. Each refresh is one `GET
-    /cluster/resources?type=vm`; `/version` is not asked again;
-  - minimized, hidden, signed out or without a list: no timer exists at all. Shown again (restored, or brought back
-    from the taskbar): one refresh at once, then the interval. Activating a window that was already visible doesn't
-    add one;
+    window is open, minimized or not, the system is awake, and a signed-in server's list is up. Each refresh is one
+    `GET /cluster/resources?type=vm`; `/version` is not asked again;
+  - hidden, closed, signed out, without a list, or while the system sleeps: no timer exists at all. Shown again, or
+    awake again: one refresh at once, then the interval. Activating a window that was already visible doesn't add
+    one;
+  - **minimized keeps refreshing** (amended 2026-10-31, the human's answer D-d77a4f645c2f below). This trades energy
+    for a list that is current when the window comes back and a password session that stays alive: a minimized
+    launcher asks the server every `refreshSeconds` (one small request, about 12 a minute at the default) until it
+    is closed or `refreshSeconds` is 0. The energy rules' "no timers while idle" is departed from here because the
+    human chose it explicitly; the cost stays bounded by one request at a time and the 2 s floor;
+  - **sleep** is told by the system, not polled: `PowerRegisterSuspendResumeNotification` with
+    `DEVICE_NOTIFY_CALLBACK` (`Pve.Api.SuspendResumeWatcher`), registered when the window opens and removed when it
+    closes. `PBT_APMSUSPEND` stops the timer; `PBT_APMRESUMEAUTOMATIC` (sent on every wake) refreshes once at once
+    and resumes the interval, and the `PBT_APMRESUMESUSPEND` that may follow adds nothing. A callback rather than
+    `WM_POWERBROADCAST` because WinUI owns the window procedure. If the registration fails, the log says so and the
+    refresh simply doesn't pause (a suspended process runs no timers anyway; the overdue one fires on wake). On a
+    Modern Standby (S0 low-power idle) machine Windows may not send these notifications for every screen-off; the
+    Desktop Activity Moderator then throttles the process instead. Not yet checked on real hardware: this change had
+    neither the desktop nor a machine to put to sleep. The first refresh after a wake may fail if the network isn't
+    back yet; it is shown once and cleared by the next answer. Amended after review R1/R2
+    ([../reviews/2026-10-31-launcher-refresh-mintty.md](../reviews/2026-10-31-launcher-refresh-mintty.md)): a wake
+    while a request from before the sleep is still running owes one more refresh, run when that request ends (never
+    two at once); and sleeping or hiding keeps a Start follow-up, which is judged by the clock when the window is
+    back (its 30 s deadline is not extended);
   - one refresh at a time: the timer is one-shot and set again when a refresh ends, so a slow server is never asked
     twice at once. A manual Refresh or a sign-in pushes the next automatic one a whole interval away;
   - after a Start's task ends: a refresh at once, then every 2 s until the guest is no longer `stopped`, for at most
     30 s (an HA-managed guest is started by the HA manager a little after its task). This runs even with
     `refreshSeconds` 0, since the user asked for it;
-  - the window is "shown" when `AppWindow.IsVisible` and its presenter isn't minimized, re-read on
-    `AppWindow.Changed`, `Activated` and `VisibilityChanged`;
+  - the window is "shown" when `AppWindow.IsVisible` (a minimized window is), re-read on `AppWindow.Changed`,
+    `Activated` and `VisibilityChanged`;
   - rows are updated in place (unchanged rows, the selection and the scroll position stay), and only when the answer
     differs from the list shown;
   - the automatic refresh never asks for a password. A session it finds ended stops it until the next sign-in, with
     "The session ended. Refresh (F5) signs in again." Other errors are shown once until the server answers again. A
     successful automatic refresh writes nothing to `launcher.log` (a failure does);
-  - a password session stays alive while the window is shown, since each refresh renews the ticket after 15 minutes,
-    as the web UI's own polling does.
+  - a password session stays alive while the window is open, minimized too, since each refresh renews the ticket
+    after 15 minutes, as the web UI's own polling does.
 - **Terminals (answer on terminals):** the `terminal` setting also takes `mintty` and `custom`, with
   `terminalCommand`; see [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md)'s amendment.
 - Amended after review ([../reviews/2026-10-31-launcher-answers.md](../reviews/2026-10-31-launcher-answers.md),
@@ -257,5 +283,12 @@
   ends as soon as its next refresh would start after 30 s.
 - Automatic refresh (the human, 2026-10-31, agentdesk D-d77a4f645c2f): renewing a password session's ticket while
   refreshing, and asking for F5 when the session has ended, are accepted; and "最小化也繼續更新，除非系統睡著": the
-  list keeps refreshing while the window is minimized, and stops only while the system sleeps.
+  list keeps refreshing while the window is minimized, and stops only while the system sleeps. Implemented as
+  described under "The list refreshes by itself" above (minimized keeps refreshing; sleep).
+- Start without the privilege (D-c33dadc59154): "disable". Decided by: the human, 2026-10-31, agentdesk: shown
+  disabled with the reason. When `/access/permissions` says the account lacks `VM.PowerMgmt` on `/vms/{vmid}`, Start
+  is shown disabled and says which privilege is missing; with no answer it stays enabled and the server decides.
+  Implemented as described under "Start" above.
 - mintty (D-9ef18eff723c): "提供彈性": `launcher.json` gets a mintty path setting; empty means detect as before.
+  Implemented as `minttyPath`, set from the window or the file; see
+  [0042](0042-terminal-choice-detects-windows-terminal-automatic-by-default.md)'s `minttyPath` amendment.

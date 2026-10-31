@@ -164,9 +164,12 @@ public static class TerminalLauncher
 
     /// <summary>Resolves a choice, looking for Windows Terminal or mintty only when the choice needs it.</summary>
     /// <param name="customCommand">The custom command's template, for <see cref="TerminalHost.Custom"/>.</param>
-    public static TerminalTarget Resolve(TerminalHost choice, IReadOnlyList<string>? customCommand = null) => choice switch
+    /// <param name="minttyPath">The user's <c>minttyPath</c>, for <see cref="TerminalHost.Mintty"/>; one that can't be
+    /// used falls back to detection (<see cref="MinttyLocator.Find(string?)"/>; a caller that shows its problem looks
+    /// it up itself).</param>
+    public static TerminalTarget Resolve(TerminalHost choice, IReadOnlyList<string>? customCommand = null, string? minttyPath = null) => choice switch
     {
-        TerminalHost.Mintty => ResolveMintty(MinttyLocator.Scan()),
+        TerminalHost.Mintty => ResolveMintty(MinttyLocator.Find(minttyPath).Found),
         TerminalHost.Custom => TerminalTarget.Custom(customCommand),
         _ => Resolve(choice, choice is TerminalHost.Default or TerminalHost.Conhost ? WindowsTerminalScan.Nothing : WindowsTerminalLocator.Scan()),
     };
@@ -174,7 +177,7 @@ public static class TerminalLauncher
     /// <summary>The first mintty found, or an error that says where it was looked for.</summary>
     public static TerminalTarget ResolveMintty(IReadOnlyList<MinttyInstall> found) => found.Count > 0
         ? TerminalTarget.In(found[0])
-        : throw new PveApiException("mintty was not found (on PATH, in MSYS2 or Git for Windows, or their scoop apps). Install one, or choose another terminal.");
+        : throw new PveApiException("mintty was not found (on PATH, in MSYS2 or Git for Windows, or their scoop apps). Install one, set its path, or choose another terminal.");
 
     /// <summary>
     /// <see cref="TerminalHost.Auto"/> becomes the Windows Terminal the scan prefers, or <see cref="TerminalHost.Default"/>.

@@ -182,8 +182,9 @@ from the folder above it.
                SPICE or VNC yourself.
   Start        a stopped VM or container shows "Start" (button or right-click), as the web
                UI's Start does. It needs the VM.PowerMgmt privilege; when the server says
-               the account lacks it, Start is not shown. The launcher follows the start
-               task for up to 2 minutes and shows its error if the start fails.
+               the account lacks it, Start is shown greyed out and says so. The launcher
+               follows the start task for up to 2 minutes and shows its error if the
+               start fails.
   VNC          "Open VNC console" opens a VM's VNC display in a VNC viewer you install
                yourself. PveTerm.exe (no window) signs in to the VM's VNC server and offers
                the session on a one-time port on 127.0.0.1; only a program running as you
@@ -218,10 +219,15 @@ from the folder above it.
                    one it will open.
                  Windows Terminal, Windows Terminal Preview: a tab in that one (listed
                    when installed).
-                 mintty: a new mintty window (listed when found: mintty.exe on PATH, MSYS2
-                   or Git for Windows, installed normally or with scoop). The launcher
+                 mintty: a new mintty window (found as mintty.exe on PATH, in MSYS2 or in
+                   Git for Windows, installed normally or with scoop). The launcher
                    sets MSYS=enable_pcon for it, which PveTerm needs to get a real console
                    in mintty. If PveTerm fails, the window stays open to show why.
+                   To use another mintty, choose mintty and click "mintty path..." next
+                   to the list: the full path of mintty.exe or of its folder
+                   (%VARIABLES% work), saved as "minttyPath" in data\launcher.json.
+                   Empty looks for it as above. A path that no longer exists is skipped
+                   with a warning and the usual places are searched.
                  Default terminal app: a new console, which Windows 11 opens in your
                    default terminal app.
                  Console host (conhost): the classic console window.
@@ -236,8 +242,10 @@ from the folder above it.
                escapes). A VM's serial console can't learn the window's size: at its
                shell prompt, ~r types "stty rows R cols C" and Enter with the current size.
   Refresh      the list updates by itself every 5 seconds while the launcher's window is
-               shown, and right away when you bring it back from the taskbar. Minimized or
-               hidden, it asks the server nothing. After a Start it checks every 2 seconds
+               open, minimized too. It pauses while the computer sleeps and updates right
+               away when it wakes up; closing the window stops it. With a password sign-in
+               this keeps the session alive while the window is open. After a Start it
+               checks every 2 seconds
                until the guest is running (at most 30 seconds). F5 or the Refresh button
                fetches it at once. Set "refreshSeconds" in data\launcher.json to change
                the interval (2 to 3600), or to 0 to turn the automatic refresh off.

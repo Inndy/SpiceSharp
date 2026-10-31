@@ -141,6 +141,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <Button x:Name="ConsoleButton" Content="Open console" Style="{StaticResource AccentButtonStyle}"
                         Click="OnOpenConsole" IsEnabled="False"
@@ -149,9 +150,12 @@
                         ToolTipService.ToolTip="VM: its VNC display in your own VNC viewer, through PveTerm's VNC bridge." />
                 <Button x:Name="TerminalButton" Grid.Column="2" Content="Open terminal" Click="OnOpenTerminal" IsEnabled="False"
                         ToolTipService.ToolTip="VM: serial console. Container: console. Opens in your terminal through PveTerm." />
-                <!-- Shown only for a stopped guest the account may start (VM.PowerMgmt, when the server says). -->
-                <Button x:Name="StartButton" Grid.Column="3" Content="Start" Click="OnStart" Visibility="Collapsed"
-                        ToolTipService.ToolTip="Start this stopped guest, as the web UI's Start does" />
+                <!-- Shown for a stopped guest; disabled, with the reason, when the server says the account lacks
+                     VM.PowerMgmt. The tooltip sits on a hit-testable holder, since a disabled button shows none. -->
+                <Border x:Name="StartHolder" Grid.Column="3" Visibility="Collapsed" Background="Transparent"
+                        ToolTipService.ToolTip="Start this stopped guest, as the web UI's Start does">
+                    <Button x:Name="StartButton" Content="Start" Click="OnStart" />
+                </Border>
                 <TextBlock Grid.Column="5" Text="VNC viewer:" VerticalAlignment="Center" />
                 <!-- Items in the order of MainWindow.VncChoices; labelled from the detection when the list opens. -->
                 <ComboBox x:Name="VncChoice" Grid.Column="6" SelectionChanged="OnVncChoiceChanged"
@@ -166,7 +170,7 @@
                 </ComboBox>
                 <TextBlock Grid.Column="7" Text="Terminal:" VerticalAlignment="Center" />
                 <!-- Items in the order of MainWindow.TerminalChoices. The Windows Terminal items are labelled from the
-                     detection and shown only when found (or chosen). -->
+                     detection and shown only when found (or chosen); mintty is always listed. -->
                 <ComboBox x:Name="TerminalChoice" Grid.Column="8" SelectionChanged="OnTerminalChoiceChanged"
                           DropDownOpened="OnTerminalChoiceOpened" DropDownClosed="OnTerminalChoiceClosed" MinWidth="200">
                     <ComboBoxItem x:Name="AutoTerminalItem" Content="Automatic" />
@@ -177,6 +181,9 @@
                     <ComboBoxItem Content="Console host (conhost)" />
                     <ComboBoxItem x:Name="CustomTerminalItem" Content="Custom command (launcher.json)" />
                 </ComboBox>
+                <!-- minttyPath in launcher.json; shown while mintty is the choice, or a path is set. -->
+                <Button x:Name="MinttyPathButton" Grid.Column="9" Content="mintty path…" Click="OnMinttyPath" Visibility="Collapsed"
+                        ToolTipService.ToolTip="Which mintty.exe to use; empty looks for it automatically" />
             </Grid>
         </Grid>
     </Grid>

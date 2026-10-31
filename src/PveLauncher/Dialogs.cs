@@ -116,6 +116,37 @@ static class Dialogs
         return await dialog.ShowAsync() == ContentDialogResult.Primary ? c : null;
     }
 
+    /// <summary>
+    /// Asks for <c>minttyPath</c>: the text as written (trimmed; "" to look for mintty automatically), or null when
+    /// cancelled. A path <see cref="MinttyLocator.CheckPath"/> refuses keeps the dialog open with the reason.
+    /// </summary>
+    public static async Task<string?> AskMinttyPathAsync(XamlRoot root, string? current, IReadOnlyList<MinttyInstall> detected)
+    {
+        var path = new TextBox
+        {
+            Header = "mintty.exe, or the folder that holds it",
+            Text = current ?? "",
+            PlaceholderText = @"C:\msys64\usr\bin\mintty.exe",
+            FontFamily = new FontFamily("Consolas"),
+        };
+        var note = Note("Empty: look for it on PATH, in MSYS2 and in Git for Windows" +
+                        (detected.Count > 0 ? $" (now: {detected[0].Path})." : " (none found now).") +
+                        " %VARIABLES% are expanded. Saved as minttyPath in launcher.json.");
+        var error = ErrorText();
+        var panel = new StackPanel { Spacing = 10, MinWidth = 440, Children = { path, note, error } };
+        var dialog = Dialog(root, "mintty path", panel, "Save");
+        string? answer = null;
+        dialog.PrimaryButtonClick += (_, e) =>
+        {
+            string text = path.Text.Trim();
+            string? problem = text.Length == 0 ? null : MinttyLocator.CheckPath(text, MinttyProbe.System, out MinttyInstall? unused);
+            Show(error, problem is null ? null : problem + ".");
+            e.Cancel = problem is not null;
+            answer = text;
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary ? answer : null;
+    }
+
     public static async Task<SecretAnswer?> AskSecretAsync(XamlRoot root, PveServerConfig server, string? problem)
     {
         bool isToken = server.Auth == PveAuthKind.Token;

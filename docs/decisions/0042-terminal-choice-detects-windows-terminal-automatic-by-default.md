@@ -91,7 +91,9 @@
   `MSYS=enable_pcon`; the launcher gets a mintty choice (setting that variable) and custom command templates."
   The details below are the agent's (spec silent), not yet reviewed.
 - **Choices.** The settings file also stores `mintty` and `custom`. The list shows "mintty (MSYS2 (scoop))" and the
-  like when one is found (or when it is the saved choice, then "not found"), and "Custom command (launcher.json)"
+  like when one is found, else "mintty (not found)" (amended after review R3,
+  [../reviews/2026-10-31-launcher-refresh-mintty.md](../reviews/2026-10-31-launcher-refresh-mintty.md): always
+  listed, so choosing it reaches "mintty path…" for an install detection misses), and "Custom command (launcher.json)"
   when `terminalCommand` is set (or chosen). Automatic is unchanged: it never picks mintty.
 - **Where mintty is looked for** (`Pve.Api.MinttyLocator`, file checks only, each time a terminal opens or the list
   opens): `mintty.exe` in a fully qualified PATH folder; MSYS2 in scoop (`%SCOOP%` or `%USERPROFILE%\scoop`, then
@@ -101,6 +103,22 @@
   reads `CYGWIN`, not `MSYS`). Verified on the development machine (2026-10-31, read only): scoop's MSYS2 and Git
   both have `usr\bin\mintty.exe`; MSYS2's is mintty 3.8.3, whose man page and `--help` text list `-t/--title`,
   `-h/--hold never|start|error|always` and `-e/--exec`.
+- **`minttyPath`** (amended 2026-10-31; decided by the human through agentdesk D-9ef18eff723c, "提供彈性": a mintty
+  path setting; the details are the agent's, spec silent, not yet reviewed). `launcher.json` may name the mintty to
+  use; absent, empty or blank means detection as above (`Pve.Api.MinttyLocator.Find`):
+  - set from the window with "mintty path…" next to the terminal list (shown while mintty is the choice or a path is
+    set), or by editing the file. The value is kept as written and checked when it is used;
+  - surrounding quotes and spaces are dropped and `%VARIABLE%`s expanded (an unknown one stays as written). The
+    result must be a full path: to a file (any name, so a renamed or wrapped mintty, or wsltty's, works), or to a
+    folder with `mintty.exe` in it. A relative path is refused rather than resolved against the launcher's folder,
+    so a path never depends on where the launcher was started from;
+  - a usable path comes first, before what detection finds (listed once); the terminal list shows it as
+    "mintty (minttyPath)";
+  - a path that can't be used doesn't block the launch: the reason is logged, detection takes over, and the status
+    bar says which mintty opened and why ("minttyPath "…" was not found; looking for mintty as usual"). The list's
+    tooltip shows the same reason. The dialog itself refuses a path that can't be used;
+  - no file picker: the WinUI picker in an unpackaged app needs window interop that this change couldn't try on the
+    desktop. Pasting a path covers it; a picker can follow.
 - **mintty's command:** `mintty.exe --title TITLE --hold error --exec PveTerm.exe console --pipe NAME --nonce HEX`,
   started without ShellExecute so the environment can be set:
   - `MSYS` is the user's own value with ` enable_pcon` added last (the runtime reads its options in order, so this

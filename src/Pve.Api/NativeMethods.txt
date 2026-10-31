@@ -13,3 +13,11 @@ CreateFile
 DeviceIoControl
 FSCTL_GET_REPARSE_POINT
 IO_REPARSE_TAG_APPEXECLINK
+
+// Suspend and resume notifications (SystemPower.cs)
+PowerRegisterSuspendResumeNotification
+PowerUnregisterSuspendResumeNotification
+DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS
+PBT_APMSUSPEND
+PBT_APMRESUMEAUTOMATIC
+PBT_APMRESUMESUSPEND

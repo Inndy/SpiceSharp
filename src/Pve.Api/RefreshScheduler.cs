@@ -1,9 +1,10 @@
 namespace Pve.Api;
 
 /// <summary>
-/// When the launcher's guest list refreshes by itself (docs/decisions/0038, answer 4), within the energy rules: a
-/// timer exists only while the window is visible, a list is shown, and either an interval is set or a follow-up is
-/// due. Minimized or hidden, nothing is scheduled; shown again, the list refreshes once at once. At most one refresh
+/// When the launcher's guest list refreshes by itself (docs/decisions/0038, answer 4 and the follow-up D-d77a4f645c2f): a timer exists only
+/// while the window is open, the system is awake, a list is shown, and either an interval is set or a follow-up is
+/// due. A minimized window keeps refreshing (the human's choice); while the system sleeps nothing is
+/// scheduled, and on wake (or when the window is shown again) the list refreshes once at once. At most one refresh
 /// runs at a time, and the next one is timed from when the last one ended.
 /// <para>
 /// A follow-up (<see cref="FollowUp"/>, after a Start) refreshes every <see cref="FollowUpInterval"/> until its
@@ -29,7 +30,10 @@ public sealed class RefreshScheduler : IDisposable
     ITimer? _timer;
     int _generation;
     TimeSpan _interval;
-    bool _visible, _armed, _running, _disposed;
+    bool _visible, _suspended, _armed, _running, _disposed;
+    /// <summary>A wake came while a refresh from before the sleep was still running: its answer may be stale, so one
+    /// more refresh follows it (review R1).</summary>
+    bool _wakeOwed;
     Func<bool>? _followUpDone;
     long _followUpStart;
 
@@ -66,8 +70,8 @@ public sealed class RefreshScheduler : IDisposable
         }
     }
 
-    /// <summary>The window is shown and not minimized. Becoming visible refreshes at once (when anything would be
-    /// scheduled at all); becoming hidden stops the timer.</summary>
+    /// <summary>The window is shown; a minimized window counts as shown (the human's choice). Becoming visible refreshes at once
+    /// (when anything would be scheduled at all); becoming hidden stops the timer.</summary>
     public bool Visible
     {
         get => _visible;
@@ -75,9 +79,28 @@ public sealed class RefreshScheduler : IDisposable
         {
             if (_visible == value) return;
             _visible = value;
-            if (value && Wanted) Fire();
-            else Reschedule();
+            Changed(value);
         }
+    }
+
+    /// <summary>The system is going to sleep (a suspend notification, not polled). Suspending stops the timer;
+    /// resuming refreshes once at once (when anything would be scheduled at all), then the schedule goes on.</summary>
+    public bool Suspended
+    {
+        get => _suspended;
+        set
+        {
+            if (_suspended == value) return;
+            _suspended = value;
+            _wakeOwed = !value && _running;
+            Changed(!value);
+        }
+    }
+
+    void Changed(bool cameBack)
+    {
+        if (cameBack && Wanted) Fire();
+        else Reschedule();
     }
 
     /// <summary>A signed-in server's list is shown, so there is something to refresh. Arming doesn't refresh: the
@@ -121,7 +144,7 @@ public sealed class RefreshScheduler : IDisposable
     }
 
     /// <summary>Whether anything would be scheduled now.</summary>
-    bool Wanted => !_disposed && _visible && _armed && (_followUpDone is not null || _interval > TimeSpan.Zero);
+    bool Wanted => !_disposed && _visible && !_suspended && _armed && (_followUpDone is not null || _interval > TimeSpan.Zero);
 
     TimeSpan Next => _followUpDone is not null ? FollowUpInterval : _interval;
 
@@ -143,9 +166,11 @@ public sealed class RefreshScheduler : IDisposable
         _generation++;
         _timer?.Dispose();
         _timer = null;
-        ExpireFollowUp(FollowUpInterval);
-        // A running refresh reschedules when it ends.
+        // A running refresh reschedules when it ends. Nothing is scheduled while hidden or asleep, so a follow-up is
+        // kept then and judged by the clock when it comes back (review R2).
         if (!Wanted || _running) return;
+        ExpireFollowUp(FollowUpInterval);
+        if (!Wanted) return;
         int generation = _generation;
         _timer = _time.CreateTimer(_ => _post(() =>
         {
@@ -160,7 +185,8 @@ public sealed class RefreshScheduler : IDisposable
     async Task FireAsync()
     {
         if (_running) return;
-        // A follow-up that ran out while the window was hidden (or a slow refresh ran) doesn't start a request.
+        // A follow-up that ran out while the window was hidden or the system slept (or a slow refresh ran) doesn't
+        // start a request.
         ExpireFollowUp(TimeSpan.Zero);
         if (!Wanted)
         {
@@ -175,6 +201,15 @@ public sealed class RefreshScheduler : IDisposable
         catch (Exception e) { Error?.Invoke(e); }
         finally { _running = false; }
         CheckFollowUp();
+        if (_wakeOwed)
+        {
+            _wakeOwed = false;
+            if (Wanted)
+            {
+                Fire();
+                return;
+            }
+        }
         Reschedule();
     }
 

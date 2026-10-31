@@ -14,8 +14,8 @@ namespace PveLauncher;
 /// <summary>
 /// The launcher window (docs/decisions/0038): saved servers on the left, the selected server's guests on the right.
 /// Everything that talks to Proxmox, Credential Manager or another process is in Pve.Api; this class only shows it.
-/// The list is fetched on sign-in and on Refresh, and by itself every few seconds only while the window is shown
-/// (<see cref="RefreshScheduler"/>; energy rules).
+/// The list is fetched on sign-in and on Refresh, and by itself every few seconds while the window is open, minimized
+/// or not, and the system is awake (<see cref="RefreshScheduler"/>, <see cref="SuspendResumeWatcher"/>).
 /// </summary>
 public sealed partial class MainWindow : Window, ISignInPrompt
 {
@@ -28,6 +28,8 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     IReadOnlyList<PveVm> _guests = [];
     bool _busy, _loading, _closed;
     readonly RefreshScheduler _autoRefresh;
+    /// <summary>Stops the automatic refresh while the system sleeps; null when the registration failed (logged).</summary>
+    readonly SuspendResumeWatcher? _power;
     /// <summary>The last automatic refresh's error, shown once until the server answers again.</summary>
     string? _autoRefreshError;
     /// <summary>Counts list requests, manual and automatic; only the latest one started may update the list, so an
@@ -36,7 +38,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     const string AutoRefreshFailed = "Could not refresh the guests";
 
     /// <summary>Whether the account may start a guest (<c>VM.PowerMgmt</c> on <c>/vms/VMID</c>), by server and VMID,
-    /// as the server answered; a guest missing here is unknown, and Start is offered.</summary>
+    /// as the server answered; a guest missing here is unknown, and Start is enabled.</summary>
     readonly Dictionary<(string Server, int Vmid), bool> _canStart = [];
     readonly HashSet<(string Server, int Vmid)> _askingCanStart = [];
     /// <summary>Guests whose start task is being followed, so Start isn't offered twice.</summary>
@@ -79,8 +81,11 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             Error = e => ShowUnexpected("Could not refresh the guests", e),
         };
         LauncherLog.Write(_autoRefresh.Interval > TimeSpan.Zero
-            ? $"refresh: every {_autoRefresh.Interval.TotalSeconds:0} s while the window is shown"
+            ? $"refresh: every {_autoRefresh.Interval.TotalSeconds:0} s while the window is open (minimized too) and the system is awake"
             : "refresh: automatic refresh is off (refreshSeconds 0)");
+        // Called on a system thread; the state change is queued on the window's.
+        _power = SuspendResumeWatcher.TryStart(suspending => _ui.TryEnqueue(() => OnSystemPower(suspending)), out int powerError);
+        if (_power is null) LauncherLog.Write($"refresh: suspend notifications are unavailable (error {powerError}); the refresh can't pause while the system sleeps");
 
         _loading = true;
         ShowTerminalDetection(WindowsTerminalLocator.Scan());
@@ -90,13 +95,14 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         foreach (var s in _settings.Servers) Servers.Add(new ServerItem(s));
         _loading = false;
         SizeToDpi(1120, 700);
-        // Whether the window can be seen: shown and not minimized. Any of these may be the one that reports a change.
+        // Whether the window is shown (minimized counts). Any of these may be the one that reports a change.
         AppWindow.Changed += (_, _) => UpdateVisible();
         Activated += (_, _) => UpdateVisible();
         VisibilityChanged += (_, _) => UpdateVisible();
         Closed += (_, _) =>
         {
             _closed = true;
+            _power?.Dispose();
             _autoRefresh.Dispose();
             foreach (var c in _clients.Values) c.Dispose();
             LauncherLog.Write("exit");
@@ -112,11 +118,20 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     [LibraryImport("user32.dll")]
     private static partial uint GetDpiForWindow(nint hwnd);
 
-    /// <summary>The automatic refresh runs only while the window is shown and not minimized (energy rules).</summary>
+    /// <summary>The automatic refresh runs while the window is shown, minimized included: the human's choice
+    /// (docs/decisions/0038). It pauses only while the system sleeps (<see cref="OnSystemPower"/>).</summary>
     void UpdateVisible()
     {
         if (_closed) return;
-        _autoRefresh.Visible = AppWindow.IsVisible && AppWindow.Presenter is not OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        _autoRefresh.Visible = AppWindow.IsVisible;
+    }
+
+    /// <summary>Going to sleep stops the automatic refresh; waking refreshes once at once, then the interval.</summary>
+    void OnSystemPower(bool suspending)
+    {
+        if (_closed || _autoRefresh.Suspended == suspending) return;
+        LauncherLog.Write(suspending ? "power: the system is going to sleep; the refresh pauses" : "power: the system woke up");
+        _autoRefresh.Suspended = suspending;
     }
 
     void SizeToDpi(int width, int height)
@@ -207,18 +222,27 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         TerminalButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
         VncButton.IsEnabled = guest is not null && !guest.Vm.IsTemplate && guest.Vm.Type == PveGuestType.Qemu && !_busy;
         ConsoleButton.Content = guest?.Vm.Type == PveGuestType.Lxc ? "Open terminal" : "Open console";
-        StartButton.Visibility = guest is not null && OffersStart(guest) ? Visibility.Visible : Visibility.Collapsed;
-        StartButton.IsEnabled = !_busy;
+        StartHolder.Visibility = guest is not null && ShowsStart(guest) ? Visibility.Visible : Visibility.Collapsed;
+        string? denied = guest is null ? null : StartDenied(guest);
+        StartButton.IsEnabled = !_busy && denied is null;
+        ToolTipService.SetToolTip(StartHolder, denied ?? StartTip);
     }
 
-    /// <summary>Start is offered for a stopped guest that isn't a template, isn't already being started, and that the
-    /// account may start, as far as the server has said.</summary>
-    bool OffersStart(GuestItem g)
-    {
-        if (g.Vm.IsTemplate || g.Vm.Status != "stopped" || SelectedServer is not { } server) return false;
-        var key = (server.Config.Id, g.Vm.Vmid);
-        return !_starting.Contains(key) && !(_canStart.TryGetValue(key, out bool may) && !may);
-    }
+    const string StartTip = "Start this stopped guest, as the web UI's Start does";
+
+    /// <summary>Start is shown for a stopped guest that isn't a template and isn't already being started.</summary>
+    bool ShowsStart(GuestItem g) =>
+        !g.Vm.IsTemplate && g.Vm.Status == "stopped" && SelectedServer is { } server && !_starting.Contains((server.Config.Id, g.Vm.Vmid));
+
+    /// <summary>Why Start is disabled: the server said the account lacks <c>VM.PowerMgmt</c> on the guest (the
+    /// human's choice: shown disabled with the reason, docs/decisions/0038). Null when it may, or when it isn't known:
+    /// then the server decides when Start is clicked.</summary>
+    string? StartDenied(GuestItem g) =>
+        SelectedServer is { } server && _canStart.TryGetValue((server.Config.Id, g.Vm.Vmid), out bool may) && !may
+            ? $"This account lacks VM.PowerMgmt on /vms/{g.Vm.Vmid}, which Start needs"
+            : null;
+
+    bool OffersStart(GuestItem g) => ShowsStart(g) && StartDenied(g) is null;
 
     // ---- Running an API action ------------------------------------------------------------------------------------
 
@@ -532,8 +556,9 @@ public sealed partial class MainWindow : Window, ISignInPrompt
 
     /// <summary>
     /// Asks the server once per guest and session whether the account may start it (<c>GET /access/permissions</c>
-    /// for <c>/vms/VMID</c>), when a stopped guest is selected: a click, not a timer. Start stays offered until the
-    /// answer says no; an answer that can't be had leaves it offered, and the server decides when it is clicked.
+    /// for <c>/vms/VMID</c>), when a stopped guest is selected: a click, not a timer. Start stays enabled until the
+    /// answer says no; then it is disabled with the reason. An answer that can't be had leaves it enabled, and the
+    /// server decides when it is clicked.
     /// </summary>
     async Task LookUpStartPrivilegeAsync(GuestItem g)
     {
@@ -548,7 +573,13 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             catch (ObjectDisposedException) { return; } // signed out meanwhile
             if (may is not bool known || _clients.GetValueOrDefault(item.Config.Id) != c) return;
             _canStart[key] = known;
-            if (!known) LauncherLog.Write($"start: {c.SignedInAs} lacks VM.PowerMgmt on /vms/{g.Vm.Vmid}; Start is not offered");
+            if (!known)
+            {
+                LauncherLog.Write($"start: {c.SignedInAs} lacks VM.PowerMgmt on /vms/{g.Vm.Vmid}; Start is disabled");
+                // Said once, when it is learnt, in case the disabled button's tooltip isn't seen.
+                if (SelectedGuest?.Vm.Vmid == g.Vm.Vmid && SelectedServer?.Config.Id == item.Config.Id)
+                    ShowInfo($"Start is disabled for {g.Label}: this account lacks VM.PowerMgmt on /vms/{g.Vm.Vmid}.", InfoBarSeverity.Informational);
+            }
         }
         finally { _askingCanStart.Remove(key); }
         UpdateButtons();
@@ -632,8 +663,11 @@ public sealed partial class MainWindow : Window, ISignInPrompt
         var vmOnly = guest?.Vm.Type == PveGuestType.Lxc ? Visibility.Collapsed : Visibility.Visible;
         MenuConsole.Visibility = MenuSpice.Visibility = MenuVnc.Visibility = vmOnly;
         MenuConsole.IsEnabled = MenuSpice.IsEnabled = MenuVnc.IsEnabled = MenuTerminal.IsEnabled = guest is not null && !guest.Vm.IsTemplate && !_busy;
-        MenuStart.Visibility = guest is not null && OffersStart(guest) ? Visibility.Visible : Visibility.Collapsed;
-        MenuStart.IsEnabled = !_busy;
+        MenuStart.Visibility = guest is not null && ShowsStart(guest) ? Visibility.Visible : Visibility.Collapsed;
+        // A menu item shows no tooltip when disabled either; its text carries the reason.
+        bool denied = guest is not null && StartDenied(guest) is not null;
+        MenuStart.Text = denied ? "Start (needs VM.PowerMgmt)" : "Start";
+        MenuStart.IsEnabled = !_busy && !denied;
     }
 
     void OnOpenConsole(object sender, RoutedEventArgs e) => Guard("Could not open the console", OpenPrimaryAsync);
@@ -712,14 +746,22 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             // Looks for the terminal at each launch, before the descriptor is requested, so a chosen one that is
             // missing (or a custom command without {pipe}) costs no ticket renewal.
             var scan = WindowsTerminalLocator.Scan();
-            ShowTerminalDetection(scan);
-            var target = host is TerminalHost.Mintty or TerminalHost.Custom
-                ? TerminalLauncher.Resolve(host, _settings.TerminalCommand)
-                : TerminalLauncher.Resolve(host, scan);
+            var mintty = MinttyLocator.Find(_settings.MinttyPath);
+            ShowTerminalDetection(scan, mintty);
+            // A minttyPath that can't be used falls back to detection, and says so.
+            string? minttyProblem = host == TerminalHost.Mintty ? mintty.Problem : null;
+            if (minttyProblem is not null) LauncherLog.Write($"terminal: {minttyProblem}");
+            var target = host switch
+            {
+                TerminalHost.Mintty => TerminalLauncher.ResolveMintty(mintty.Found),
+                TerminalHost.Custom => TerminalLauncher.Resolve(host, _settings.TerminalCommand),
+                _ => TerminalLauncher.Resolve(host, scan),
+            };
             var d = await c.CreateTermDescriptorAsync(g.Vm);
             exited = await TerminalLauncher.LaunchAsync(d, bridge, target);
             LauncherLog.Write($"terminal: {g.Label} on {g.Vm.Node} via {host}: {target}");
-            ShowInfo($"Opened the terminal of {g.Label}.");
+            if (minttyProblem is null) ShowInfo($"Opened the terminal of {g.Label}.");
+            else ShowInfo($"Opened the terminal of {g.Label} in {target.Mintty!.Path}: {minttyProblem}.", InfoBarSeverity.Warning);
         });
         if (exited is null) return;
         // Waits on the process handle, no polling; reports a session that failed after the hand-off.
@@ -792,6 +834,7 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     {
         if (_loading || TerminalChoice.SelectedIndex < 0) return;
         _settings.Terminal = TerminalChoices[TerminalChoice.SelectedIndex];
+        ShowMinttyPathButton();
         SaveSettings();
     }
 
@@ -799,9 +842,26 @@ public sealed partial class MainWindow : Window, ISignInPrompt
     /// registry value.</summary>
     void OnTerminalChoiceOpened(object sender, object e) => ShowTerminalDetection(WindowsTerminalLocator.Scan());
 
+    void ShowMinttyPathButton() => MinttyPathButton.Visibility =
+        _settings.Terminal == TerminalHost.Mintty || !string.IsNullOrWhiteSpace(_settings.MinttyPath) ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>Sets <c>minttyPath</c> (docs/decisions/0042): a path that can't be used is refused in the dialog;
+    /// empty goes back to detection.</summary>
+    void OnMinttyPath(object sender, RoutedEventArgs e) => Guard("Could not set the mintty path", async () =>
+    {
+        if (await Dialogs.AskMinttyPathAsync(Root.XamlRoot, _settings.MinttyPath, MinttyLocator.Scan()) is not { } answer) return;
+        string? path = answer.Length == 0 ? null : answer;
+        if (path == _settings.MinttyPath) return;
+        _settings.MinttyPath = path;
+        SaveSettings();
+        LauncherLog.Write(path is null ? "settings: minttyPath cleared; mintty is looked for automatically" : $"settings: minttyPath {path}");
+        ShowTerminalDetection(WindowsTerminalLocator.Scan());
+        ShowInfo(path is null ? "mintty is looked for automatically." : $"mintty: {path}", InfoBarSeverity.Informational);
+    });
+
     /// <summary>Labels "Automatic" with what it opens, and shows each Windows Terminal found (or the chosen one,
     /// marked when missing).</summary>
-    void ShowTerminalDetection(WindowsTerminalScan scan)
+    void ShowTerminalDetection(WindowsTerminalScan scan, MinttyLookup? minttyLookup = null)
     {
         var auto = scan.Preferred;
         AutoTerminalItem.Content = auto is null ? "Automatic (new console)" : $"Automatic ({auto.DisplayName})";
@@ -810,13 +870,16 @@ public sealed partial class MainWindow : Window, ISignInPrompt
             : $"A new tab in {auto.Path} ({scan.PreferredReason}).");
         Label(WtTerminalItem, TerminalHost.WindowsTerminal, "Windows Terminal");
         Label(WtPreviewTerminalItem, TerminalHost.WindowsTerminalPreview, "Windows Terminal Preview");
-        // mintty: shown when found (or chosen); a few file checks, as for Windows Terminal.
-        var mintty = MinttyLocator.Scan();
-        MinttyTerminalItem.Visibility = mintty.Count > 0 || _settings.Terminal == TerminalHost.Mintty ? Visibility.Visible : Visibility.Collapsed;
+        // mintty: always listed, "not found" when detection finds none, so choosing it reaches "mintty path..." for an
+        // install elsewhere (review R3); a few file checks, as for Windows Terminal. minttyPath comes first.
+        var lookup = minttyLookup ?? MinttyLocator.Find(_settings.MinttyPath);
+        var mintty = lookup.Found;
         MinttyTerminalItem.Content = mintty.Count > 0 ? $"mintty ({mintty[0].DisplayName})" : "mintty (not found)";
-        ToolTipService.SetToolTip(MinttyTerminalItem, mintty.Count > 0
+        string minttyTip = mintty.Count > 0
             ? $"A new mintty window, {mintty[0].Path}, with MSYS=enable_pcon."
-            : "mintty was not found on PATH, in MSYS2 or in Git for Windows.");
+            : "mintty was not found on PATH, in MSYS2 or in Git for Windows.";
+        ToolTipService.SetToolTip(MinttyTerminalItem, lookup.Problem is null ? minttyTip : $"{minttyTip} ({lookup.Problem}.)");
+        ShowMinttyPathButton();
         // The custom command lives in launcher.json; the item shows only when one is set (or it is chosen).
         CustomTerminalItem.Visibility = _settings.TerminalCommand.Count > 0 || _settings.Terminal == TerminalHost.Custom
             ? Visibility.Visible : Visibility.Collapsed;

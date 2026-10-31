@@ -53,8 +53,9 @@ sealed class TimerClock : TimeProvider
     }
 }
 
-/// <summary>The automatic refresh's schedule (docs/decisions/0038, answer 4): nothing while hidden or with nothing
-/// to refresh, one refresh on restore, one at a time, and a bounded follow-up after a Start.</summary>
+/// <summary>The automatic refresh's schedule (docs/decisions/0038, answer 4 and the follow-up D-d77a4f645c2f): nothing while hidden, while the
+/// system sleeps or with nothing to refresh, one refresh on restore or wake, one at a time, and a bounded follow-up
+/// after a Start. A minimized window is still shown (the human's choice): MainWindow keeps <c>Visible</c> true for it.</summary>
 public class RefreshSchedulerTests
 {
     static readonly TimeSpan Five = TimeSpan.FromSeconds(5);
@@ -125,19 +126,105 @@ public class RefreshSchedulerTests
     }
 
     [Fact]
-    public void MinimizedOrHiddenStopsEverythingAndRestoreRefreshesOnce()
+    public void HiddenStopsEverythingAndShowingRefreshesOnce()
     {
         var r = new Rig(Five);
         r.Shown();
         r.S.Visible = false;
         Assert.False(r.S.IsScheduled);
-        Assert.Equal(0, r.Clock.Pending); // no timer at all while minimized
+        Assert.Equal(0, r.Clock.Pending); // no timer at all while hidden
         r.Clock.Advance(TimeSpan.FromHours(1));
         Assert.Equal(1, r.Refreshes);
         r.S.Visible = true;
         Assert.Equal(2, r.Refreshes);
         r.S.Visible = true; // activation of a window already shown: no extra refresh
         Assert.Equal(2, r.Refreshes);
+    }
+
+    [Fact]
+    public void SleepStopsEverythingAndWakeRefreshesOnceThenGoesOn()
+    {
+        var r = new Rig(Five);
+        r.Shown();
+        r.Clock.Advance(TimeSpan.FromSeconds(3));
+        r.S.Suspended = true; // PBT_APMSUSPEND
+        Assert.False(r.S.IsScheduled);
+        Assert.Equal(0, r.Clock.Pending); // no timer at all while the system sleeps
+        r.Clock.Advance(TimeSpan.FromHours(8));
+        Assert.Equal(1, r.Refreshes);
+        r.S.Suspended = false; // PBT_APMRESUMEAUTOMATIC
+        Assert.Equal(2, r.Refreshes); // once at once
+        r.S.Suspended = false; // PBT_APMRESUMESUSPEND after it: no extra refresh
+        Assert.Equal(2, r.Refreshes);
+        Assert.True(r.S.IsScheduled);
+        r.Clock.Advance(Five);
+        Assert.Equal(3, r.Refreshes); // and the interval goes on
+    }
+
+    [Fact]
+    public void WakingWhileHiddenOrSignedOutDoesNotRefresh()
+    {
+        var r = new Rig(Five);
+        r.Shown();
+        r.S.Suspended = true;
+        r.S.Visible = false;
+        r.S.Suspended = false;
+        Assert.Equal(1, r.Refreshes);
+        Assert.Equal(0, r.Clock.Pending);
+        r.S.Visible = true;
+        Assert.Equal(2, r.Refreshes);
+
+        r.S.Suspended = true;
+        r.S.Armed = false; // the session ended while asleep
+        r.S.Suspended = false;
+        Assert.Equal(2, r.Refreshes);
+        Assert.Equal(0, r.Clock.Pending);
+    }
+
+    [Fact]
+    public void ShowingTheWindowWhileTheSystemSleepsWaitsForWake()
+    {
+        var r = new Rig(Five);
+        r.S.Armed = true;
+        r.S.Suspended = true;
+        r.S.Visible = true;
+        Assert.Equal(0, r.Refreshes);
+        Assert.Equal(0, r.Clock.Pending);
+        r.S.Suspended = false;
+        Assert.Equal(1, r.Refreshes);
+    }
+
+    [Fact]
+    public void AFollowUpDuringSleepRunsOutAndWakeFallsBackToTheInterval()
+    {
+        var r = new Rig(Five);
+        r.Shown();
+        r.S.FollowUp(() => false); // refresh 2
+        r.S.Suspended = true;
+        r.Clock.Advance(TimeSpan.FromMinutes(5));
+        r.S.Suspended = false; // refresh 3: the follow-up has run out
+        Assert.Equal(3, r.Refreshes);
+        Assert.False(r.S.IsFollowingUp);
+        r.Clock.Advance(RefreshScheduler.FollowUpInterval);
+        Assert.Equal(3, r.Refreshes);
+        r.Clock.Advance(Five - RefreshScheduler.FollowUpInterval);
+        Assert.Equal(4, r.Refreshes);
+    }
+
+    [Fact]
+    public void ARefreshRunningAtSleepEndsWithoutRescheduling()
+    {
+        SynchronizationContext.SetSynchronizationContext(null);
+        var r = new Rig(Five) { Hold = true };
+        r.Shown();
+        r.S.Suspended = true;
+        r.Pending!.SetResult();
+        Assert.False(r.S.IsScheduled);
+        r.S.Suspended = false;
+        Assert.Equal(2, r.Refreshes);
+        r.Pending!.SetResult();
+        Assert.True(r.S.IsScheduled);
+        r.S.Dispose();
     }
 
     [Fact]
@@ -310,15 +397,32 @@ public class RefreshSchedulerTests
         Assert.Equal(0, r.Clock.Pending);
         r.S.Visible = false;
         r.S.Visible = true;
+        r.S.Suspended = true;
+        r.S.Suspended = false;
         r.S.FollowUp(() => false);
         r.Clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(1, r.Refreshes);
     }
 
     [Fact]
+    public void AStaleTickQueuedBeforeSleepDoesNothing()
+    {
+        var clock = new TimerClock();
+        var queued = new List<Action>();
+        int n = 0;
+        var s = new RefreshScheduler(Five, () => { n++; return Task.CompletedTask; }, queued.Add, clock);
+        s.Armed = true;
+        s.Visible = true; // n = 1
+        clock.Advance(Five); // the tick is queued, not run
+        s.Suspended = true;
+        queued[0]();
+        Assert.Equal(1, n);
+    }
+
+    [Fact]
     public void AStaleTimerCallbackDoesNothing()
     {
-        // A tick already queued on the window's thread when the window was minimized must not refresh.
+        // A tick already queued on the window's thread when the window was hidden must not refresh.
         var clock = new TimerClock();
         var queued = new List<Action>();
         int n = 0;
@@ -330,5 +434,27 @@ public class RefreshSchedulerTests
         s.Visible = false;
         queued[0]();
         Assert.Equal(1, n);
+    }
+}
+
+/// <summary>The suspend and resume notifications that stop and restart the automatic refresh.</summary>
+public class SuspendResumeWatcherTests
+{
+    [Theory]
+    [InlineData(0x4u, true)]    // PBT_APMSUSPEND
+    [InlineData(0x12u, false)]  // PBT_APMRESUMEAUTOMATIC
+    [InlineData(0x7u, false)]   // PBT_APMRESUMESUSPEND
+    [InlineData(0xAu, null)]    // PBT_APMPOWERSTATUSCHANGE
+    [InlineData(0x8013u, null)] // PBT_POWERSETTINGCHANGE
+    public void NotificationTypesMapToSleepAndWake(uint type, bool? expected) =>
+        Assert.Equal(expected, SuspendResumeWatcher.Map(type));
+
+    [Fact]
+    public void RegistersAndUnregistersWithoutAWindow()
+    {
+        var w = SuspendResumeWatcher.TryStart(_ => { }, out int error);
+        Assert.True(w is not null, $"error {error}");
+        w.Dispose();
+        w.Dispose(); // twice is harmless
     }
 }
