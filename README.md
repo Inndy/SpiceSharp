@@ -94,6 +94,10 @@ passing tests do not prove every protocol edge case or hostile input is safe. Bu
 
 ## Build and test
 
+GitHub Actions builds portable Native AOT packages for Windows x64 and ARM64. Download the zip and SHA-256
+file from a successful **Windows release build** run's artifacts. See [GitHub CI](docs/github-ci.md) for triggers,
+validation coverage and release promotion. These packages include the viewer, launcher and terminal bridge.
+
 Use the .NET 10 SDK selected by `global.json`. Windows Native AOT publishing also requires Visual Studio Build
 Tools with C++ tools and the Windows SDK, plus PowerShell 7. The current codec build uses MSYS2 CLANG64 with
 Clang/LLD, CMake, Ninja, NASM, GNU make and fetch utilities. See [native/README.md](native/README.md) for the

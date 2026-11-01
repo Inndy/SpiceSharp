@@ -1,0 +1,143 @@
+name: Windows release build
+
+'on':
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  build:
+    name: Build win-${{ matrix.arch }}
+    runs-on: windows-2025
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, arm64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+
+      - name: Set up POSIX build utilities
+        id: msys2
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: MSYS
+          path-type: inherit
+          install: make diffutils curl tar xz mingw-w64-ucrt-x86_64-nasm
+
+      - name: Set up MSVC target environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+
+      - name: Build native codecs
+        env:
+          MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:PATH = "${env:ProgramFiles}/LLVM/bin;$env:MSYS2_ROOT/ucrt64/bin;$env:PATH"
+          # No login shell: retain the MSVC developer environment and tool paths.
+          & "$env:MSYS2_ROOT/usr/bin/bash.exe" native/build-msvc.sh $env:TARGET_ARCH
+          if ($LASTEXITCODE -ne 0) { throw 'Native codec build failed' }
+
+      - name: Verify native ABI and hardening
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          $env:PATH = "${env:ProgramFiles}/LLVM/bin;$env:PATH"
+          python native/verify.py $env:TARGET_ARCH
+          if ($LASTEXITCODE -ne 0) { throw 'Native verification failed' }
+
+      - name: Build solution and run window-free tests
+        if: matrix.arch == 'x64'
+        run: |
+          dotnet build SpiceViewer.sln -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Solution build failed' }
+          $projects = @(
+            'Spice.Native.Tests', 'Spice.Wire.Tests', 'Spice.Replay.Tests',
+            'Spice.Video.Tests', 'Spice.Diagnostics.Tests', 'Pve.Api.Tests', 'Pve.Term.Tests'
+          )
+          foreach ($project in $projects) {
+            dotnet test "tests/$project/$project.csproj" -c Release --no-build --no-restore --logger "trx;LogFileName=$project.trx" --results-directory TestResults
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed: $project" }
+          }
+
+      - name: Publish Native AOT portable package
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          ./tools/package.ps1 -Rid "win-$env:TARGET_ARCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+
+      - name: Validate release archive and checksum
+        env:
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(Get-ChildItem "artifacts/SpiceViewer-*-win-$env:TARGET_ARCH.zip")
+          if ($packages.Count -ne 1) { throw 'Expected exactly one release archive' }
+          $package = $packages[0]
+          $hash = (Get-FileHash -Algorithm SHA256 $package.FullName).Hash.ToLowerInvariant()
+          $expected = "$hash  $($package.Name)"
+          if ((Get-Content -Raw "$($package.FullName).sha256").Trim() -cne $expected) {
+            throw 'Release archive checksum does not match its sidecar'
+          }
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            foreach ($required in @(
+              'SpiceViewer.exe', 'PveTerm.exe', 'PveLauncher/PveLauncher.exe',
+              'spicecodec.dll', 'turbojpeg.dll', 'opus.dll', 'README.txt', 'LICENSE.txt',
+              'source/native/build-msvc.sh', 'source/native/fetch.sh'
+            )) {
+              if ($entries -cnotcontains $required) { throw "Release archive is missing $required" }
+            }
+            if ($entries | Where-Object { $_ -match '(^|/)data/|\.vv$|\.pdb$' }) {
+              throw 'Release archive contains runtime data, a connection file or debug symbols'
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Upload portable release package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SpiceViewer-win-${{ matrix.arch }}
+          path: |
+            artifacts/*.zip
+            artifacts/*.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload test results
+        if: always() && matrix.arch == 'x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-win-x64
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+          retention-days: 14

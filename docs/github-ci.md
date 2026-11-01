@@ -1,0 +1,43 @@
+# GitHub CI and release build artifacts
+
+[Windows release build](../.github/workflows/build.yml) runs on pushes to `main`, tags matching `v*`, pull
+requests and manual **Actions > Windows release build > Run workflow** dispatches. The workflow must first be
+pushed to GitHub; manual dispatch becomes available after it is present on the default branch. No secrets or
+private runner setup are required. The existing [GitLab pipeline](ci.md) is independent.
+
+## Build and validation
+
+Two disposable `windows-2025` x64 runners build `win-x64` and `win-arm64` independently. Each sets up the SDK
+from `global.json`, MSYS2 utilities and a matching MSVC developer environment. The hosted image supplies CMake,
+Ninja, LLVM, Python and the Windows SDK. MSYS2 NASM supplies x64 assembly. A non-login MSYS2 bash retains the
+developer environment required by `native/build-msvc.sh`. Native source downloads are hash-checked by `fetch.sh`.
+Actions are pinned to commit hashes; hosted image and utility package versions can change between runs.
+
+Both jobs build codecs using the existing MSVC script, verify their architecture, exports, imports and PE
+protections, then run `tools/package.ps1` for the matching RID. The x64 job also runs the native smoke test
+(inside the native build script), builds the full solution and executes all seven window-free test projects
+sequentially before packaging. Any failed build, verification, test or publish stops that job's package upload.
+Before upload, each job checks the zip's SHA-256 sidecar, required executables, DLLs, notices and native build
+scripts, and rejects runtime data, connection files and debug symbols in the archive. TRX reports upload even
+after a test failure. ARM64 is cross-built, not executed or tested on ARM hardware.
+
+The workflow never runs `Spice.Viewer.Tests`, opens application windows, contacts a guest, accesses Proxmox
+credentials, signs executables or publishes a GitHub Release. Hardware-dependent tests may skip on hosted
+runners. A successful build does not prove GUI behavior, real-guest compatibility, energy use or ARM64 runtime
+behavior. Require **both matrix jobs** to succeed before considering their packages for a release.
+
+## Download and promote
+
+Open a successful workflow run in the repository's Actions tab. The `SpiceViewer-win-x64` and
+`SpiceViewer-win-arm64` artifacts each contain the existing `SpiceViewer-<version>-<rid>.zip` and its
+`.zip.sha256` sidecar. Download and extract GitHub's artifact wrapper first; the checksum applies to the inner
+release zip. Artifacts expire after 14 days. `test-results-win-x64` contains the TRX reports separately.
+
+The portable zip includes SpiceViewer.exe, PveTerm.exe, the self-contained PveLauncher folder, three codec DLLs,
+README.txt, LICENSE.txt and source/native rebuild files. The existing packaging script controls this layout and
+version. A `v*` tag triggers a build but does not change the project version or create a release. Set project
+versions deliberately before tagging, and review both jobs and their matching commit before distribution.
+
+To publish later, download the packages from that reviewed run and attach the **inner release zips and their
+checksum sidecars** to a GitHub Release. Release publication and signing remain explicit human steps; CI has
+only `contents: read` permission. Do not mistake the outer GitHub artifact archive for the portable release zip.
