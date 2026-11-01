@@ -6,6 +6,20 @@ and reviews this authorized integration; this is not an independent review.
 
 ## Findings and response
 
+- **P3, resolved: the pipe-ACL test rejected a valid SDDL SID alias.** The
+  hosted runner's administrator account is represented as `LA` when Windows
+  formats the descriptor. The test assumed every user was printed as a full
+  SID string. It now decodes the descriptor and compares exact SID identities;
+  the protected DACL, exactly-one allow ACE, full-access and mandatory-label
+  assertions are unchanged. This fixes a provably wrong test, not pipe security.
+  See [Microsoft's SID-string constants](https://learn.microsoft.com/en-us/windows/win32/secauthz/sid-strings).
+- **P3, resolved: a disturbed allocation sample forced an entire CI job rerun.**
+  One replay guard exhausted all five GC-clean windows, then passed on a plain
+  job rerun. CI may now rerun a completed project once only when every failure
+  is that explicit guard-exhaustion message. It retains the original TRX. The
+  classifier was checked against both actual failed-run reports, a real
+  clean-window regression message, mixed failures, an aborted run, a successful
+  run and a missing report. No real failure is classified as GC-only noise.
 - **P2, resolved: the AOT developer environment changed the default platform.**
   Its ambient `Platform=x64` made SDK MSBuild select the optional native project
   during the hosted solution build. GitHub and GitLab now explicitly select

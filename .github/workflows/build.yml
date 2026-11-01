@@ -116,6 +116,19 @@ jobs:
       - name: Build solution and run window-free tests
         if: matrix.arch == 'x64'
         run: |
+          function Test-OnlyDisturbedAllocationWindows([string]$TrxPath) {
+            if (-not (Test-Path -LiteralPath $TrxPath)) { return $false }
+            try { [xml]$results = Get-Content -LiteralPath $TrxPath -Raw } catch { return $false }
+            if ($results.TestRun.ResultSummary.outcome -ne 'Failed') { return $false }
+            $counts = $results.TestRun.ResultSummary.Counters
+            if (-not $counts -or [int]$counts.total -le 0 -or $counts.executed -ne $counts.total) { return $false }
+            $failed = @($results.TestRun.Results.UnitTestResult | Where-Object outcome -eq 'Failed')
+            if ($failed.Count -eq 0) { return $false }
+            $otherFailures = @($failed | Where-Object {
+              [string]$_.Output.ErrorInfo.Message -notmatch '(?s)^.+: no undisturbed allocation window: all [0-9]+ attempts were disturbed.*This is runtime interference, not a clean-window allocation regression\.$'
+            })
+            return $otherFailures.Count -eq 0
+          }
           # vcvars sets Platform=x64: override it so this managed build keeps the Clang DLLs.
           dotnet build SpiceViewer.sln -c Release '-p:Platform=Any CPU'
           if ($LASTEXITCODE -ne 0) { throw 'Solution build failed' }
@@ -129,6 +142,13 @@ jobs:
             $testArgs = @('test', "tests/$project/$project.csproj", '-c', 'Release', '--no-build', '--no-restore', '-p:Platform=AnyCPU', '--logger', "trx;LogFileName=$project.trx", '--results-directory', 'TestResults')
             if ($project -like 'Spice.*') { $testArgs += @('--settings', 'TestResults/serial.runsettings') }
             dotnet @testArgs
+            if ($LASTEXITCODE -ne 0 -and (Test-OnlyDisturbedAllocationWindows "TestResults/$project.trx")) {
+              # One plain fresh-process rerun, only for exhausted GC-disturbance guards.
+              # Preserve the first result; actual clean-window allocation regressions never retry.
+              Move-Item -LiteralPath "TestResults/$project.trx" -Destination "TestResults/$project.gc-disturbed.trx"
+              Write-Warning "Only GC-disturbed measurement windows in $project; rerunning the project once."
+              dotnet @testArgs
+            }
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $project" }
           }
 

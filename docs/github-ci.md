@@ -22,10 +22,17 @@ fails immediately. This changes download availability, not the source version, s
 Both jobs build codecs using the default Clang script (`native/build.sh`), verify their architecture, exports, imports and PE
 protections, then run `tools/package.ps1` for the matching RID. The x64 job also runs the native smoke test
 (inside the native build script), builds the full solution and executes all seven window-free test projects
-sequentially before packaging. Any failed build, verification, test or publish stops that job's package upload.
+sequentially before packaging. Any unresolved build, verification, test or publish failure stops that job's package upload.
 Before upload, each job checks the zip's SHA-256 sidecar, required executables, DLLs, notices and native build
 scripts, and rejects runtime data, connection files and debug symbols in the archive. TRX reports upload even
 after a test failure. ARM64 is cross-built, not executed or tested on ARM hardware.
+
+If a completed test run fails only because every allocation-measurement window
+was GC-disturbed, CI performs one plain fresh-process project rerun, as allowed
+by the repository's flaky-test guidance. The original result is retained as
+`*.gc-disturbed.trx`. Real assertions, clean-window allocation regressions,
+aborted/incomplete runs and a failing second attempt still fail the job. No
+allocation bound or test expectation is relaxed.
 
 Clang remains the default native compiler locally and in both CI systems. The slower MSVC codec path is
 optional (including the explicit x64/ARM64 VS solution builds). GitHub CI sets up MSVC only after the Clang

@@ -41,3 +41,26 @@ managed-platform commands: the full Release solution passed with zero warnings
 or errors and all 38 native tests passed using the prebuilt Clang DLLs. Parsed
 both workflow YAML files and their PowerShell blocks. The next hosted run must
 complete the x64 test/package path as well as the already-successful ARM64 path.
+
+## Same-commit test follow-up
+
+Run 41272982506 passed native compilation and PE checks, then initially exhausted
+all five undisturbed allocation windows for one replay fixture. A plain rerun of
+the failed x64 job passed that guard and every suite through API. Terminal tests
+then exposed a separate assertion error: Windows prints the hosted administrator
+SID as the valid SDDL alias `LA`, while the test expected its full SID spelling.
+
+Verified that parsing `LA` resolves to the exact local administrator SID. The
+pipe test now parses its actual descriptor and compares exact SID identities;
+protected DACL, one allow ACE, full access and mandatory-label checks are kept.
+The full 206-test terminal suite passed locally after this test-only correction.
+No pipe security or other production code changed.
+
+To avoid repeating native compilation for known measurement interference, the
+workflow permits one plain fresh-process project rerun only for a completed TRX
+whose failures are exclusively exhausted GC-disturbance guards. It retains the
+original TRX. Extracted and exercised the exact classifier from the workflow:
+the real initial replay report was accepted; the real SID-assertion report,
+successful replay report, clean-window allocation failure, mixed failures,
+aborted report and missing report were all rejected. No assertion or allocation
+threshold was relaxed. Hosted verification of the corrected test is pending.
