@@ -31,14 +31,14 @@ windows-x64:
       if ($LASTEXITCODE -ne 0) { throw 'Native build failed' }
       python native/verify.py x64
       if ($LASTEXITCODE -ne 0) { throw 'Native DLL verification failed' }
-      dotnet build SpiceViewer.sln -c Release
+      dotnet build SpiceViewer.sln -c Release '-p:Platform=Any CPU'
       if ($LASTEXITCODE -ne 0) { throw 'Solution build failed' }
       $projects = @(
         'Spice.Native.Tests', 'Spice.Wire.Tests', 'Spice.Replay.Tests',
         'Spice.Video.Tests', 'Spice.Diagnostics.Tests', 'Pve.Api.Tests', 'Pve.Term.Tests'
       )
       foreach ($project in $projects) {
-        dotnet test "tests/$project/$project.csproj" -c Release --no-build --no-restore --logger "trx;LogFileName=$project.trx" --results-directory "$env:CI_PROJECT_DIR/test-results"
+        dotnet test "tests/$project/$project.csproj" -c Release --no-build --no-restore -p:Platform=AnyCPU --logger "trx;LogFileName=$project.trx" --results-directory "$env:CI_PROJECT_DIR/test-results"
         if ($LASTEXITCODE -ne 0) { throw "Tests failed: $project" }
       }
       pwsh -NoProfile -File tools/package.ps1 -Rid win-x64

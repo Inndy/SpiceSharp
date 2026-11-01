@@ -6,6 +6,11 @@ and reviews this authorized integration; this is not an independent review.
 
 ## Findings and response
 
+- **P2, resolved: the AOT developer environment changed the default platform.**
+  Its ambient `Platform=x64` made SDK MSBuild select the optional native project
+  during the hosted solution build. GitHub and GitLab now explicitly select
+  solution `Any CPU` and test-project `AnyCPU` when consuming the Clang outputs.
+  MSVC remains available through explicit VS solution configurations.
 - **P2, resolved: hosted builds could not fetch FFmpeg from upstream.** The
   first run failed on both targets before compilation with curl TLS resets;
   a local Windows HTTP client also could not reach that endpoint. CI now tries
@@ -18,7 +23,8 @@ and reviews this authorized integration; this is not an independent review.
   Both jobs now invoke `native/build.sh` with the SHA-256-pinned llvm-mingw
   20261020 UCRT cross-toolchain. MSVC setup follows codec compilation and is used
   by Native AOT publishing. The Any CPU managed build does not invoke the
-  optional MSVC native project. GitLab CI already uses Clang and is unchanged.
+  optional MSVC native project. GitLab's native build already uses Clang; only
+  its managed platform selection is made explicit.
 - **P3, resolved: the two branches allocated decision number 0047.** Retained
   the original GitHub CI record as 0047 and renumbered the MSVC tuning/solution
   record to 0048, including links. The rebase's sole conflict was the decision

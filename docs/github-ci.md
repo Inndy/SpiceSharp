@@ -30,6 +30,9 @@ after a test failure. ARM64 is cross-built, not executed or tested on ARM hardwa
 Clang remains the default native compiler locally and in both CI systems. The slower MSVC codec path is
 optional (including the explicit x64/ARM64 VS solution builds). GitHub CI sets up MSVC only after the Clang
 codec build, for the linker required by .NET Native AOT; it does not rebuild codec DLLs with MSVC.
+The managed solution build explicitly selects **Any CPU**, and project tests select `AnyCPU`, overriding
+the developer environment's `Platform=x64`. This preserves the Clang DLLs instead of selecting the optional
+VS/MSVC native project during `dotnet build`. GitLab uses the same explicit managed-platform selection.
 
 The workflow never runs `Spice.Viewer.Tests`, opens application windows, contacts a guest, accesses Proxmox
 credentials, signs executables or publishes a GitHub Release. Hardware-dependent tests may skip on hosted
