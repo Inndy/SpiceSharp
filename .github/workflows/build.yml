@@ -61,6 +61,34 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $env:RUNNER_TEMP
           "LLVM_MINGW_BIN=$env:RUNNER_TEMP/$name/bin" >> $env:GITHUB_ENV
 
+      - name: Fetch pinned FFmpeg source archive
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Upstream reset TLS on both hosted targets. A source cache is allowed
+          # only for the exact same archive hash; fetch.sh checks it again.
+          $pin = Get-Content native/fetch.sh | Select-String '^fetch (ffmpeg-\S+) ([a-f0-9]{64}) (https://\S+)$'
+          if (@($pin).Count -ne 1) { throw 'Expected exactly one pinned FFmpeg release' }
+          $url = $pin.Matches[0].Groups[3].Value
+          $expected = $pin.Matches[0].Groups[2].Value
+          New-Item -ItemType Directory -Force native/downloads | Out-Null
+          $name = [IO.Path]::GetFileName(([uri]$url).AbsolutePath)
+          $archive = Join-Path native/downloads $name
+          $downloaded = $false
+          foreach ($source in @($url, "https://distfiles.alpinelinux.org/distfiles/edge/$name")) {
+            try {
+              Invoke-WebRequest $source -OutFile $archive -TimeoutSec 30
+            } catch {
+              Write-Warning "Could not download $source; trying the next pinned source."
+              continue
+            }
+            if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -cne $expected) {
+              throw 'FFmpeg archive checksum mismatch'
+            }
+            $downloaded = $true
+            break
+          }
+          if (-not $downloaded) { throw 'All pinned FFmpeg source downloads failed' }
+
       - name: Build native codecs
         env:
           MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}

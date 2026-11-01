@@ -14,6 +14,10 @@ against SHA-256 `fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74c
 The hosted image supplies CMake, Ninja, Python, MSVC and the Windows SDK. MSYS2 supplies NASM and POSIX tools.
 Native source downloads are hash-checked by `fetch.sh`. Actions are pinned to commit hashes; hosted image and
 utility package versions can change between runs.
+The FFmpeg tarball is prefetched from upstream, with Alpine Linux's source cache as a transport fallback after
+observed upstream TLS failures on both hosted targets. The filename and SHA-256 come from `native/fetch.sh`;
+either source must match that same hash, then `fetch.sh` checks it again before extraction. A checksum mismatch
+fails immediately. This changes download availability, not the source version, source bytes or trust pin.
 
 Both jobs build codecs using the default Clang script (`native/build.sh`), verify their architecture, exports, imports and PE
 protections, then run `tools/package.ps1` for the matching RID. The x64 job also runs the native smoke test

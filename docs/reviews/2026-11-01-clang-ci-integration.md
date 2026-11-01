@@ -6,6 +6,13 @@ and reviews this authorized integration; this is not an independent review.
 
 ## Findings and response
 
+- **P2, resolved: hosted builds could not fetch FFmpeg from upstream.** The
+  first run failed on both targets before compilation with curl TLS resets;
+  a local Windows HTTP client also could not reach that endpoint. CI now tries
+  upstream and then Alpine Linux's source cache, requiring the original
+  fetch.sh hash from either. A hash mismatch fails immediately. The exact
+  workflow block downloaded the fallback locally and matched the existing pin.
+  No source version, source bytes or native compiler setting changed.
 - **P2, resolved: the initial GitHub workflow selected MSVC codecs.** That
   conflicted with the human's final instruction to keep Clang as default.
   Both jobs now invoke `native/build.sh` with the SHA-256-pinned llvm-mingw
