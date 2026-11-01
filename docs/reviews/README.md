@@ -5,6 +5,7 @@ with severity, the implementer appends the fixes, and the next round verifies th
 
 | File | Scope |
 |---|---|
+| [2026-11-01-clang-ci-integration.md](2026-11-01-clang-ci-integration.md) | Rebase/fast-forward integration self-review: Clang-default GitHub codecs, pinned cross-toolchain, decision renumbering and CI permissions |
 | [2026-11-01-msvc-speed-vs-solution.md](2026-11-01-msvc-speed-vs-solution.md) | MSVC flag/VS solution self-review: transitive build ordering, fresh native content copying, architecture-dependent test paths and measured speed trade-offs |
 | [2026-11-01-msvc-codec.md](2026-11-01-msvc-codec.md) | MSVC native build self-review: CRT initialization, ARM64 architecture, exact ABI and PE protections, package/runtime notices, and localized header dependencies |
 | [2026-10-31-launcher-refresh-mintty.md](2026-10-31-launcher-refresh-mintty.md) | Three-commit review: sleep callback lifetime, wake/follow-up scheduling, mintty path and fallback, disabled Start guards, and offline regressions |

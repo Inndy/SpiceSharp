@@ -55,5 +55,5 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0044](0044-status-overlay-redraws-only-with-presents-it-already-makes.md) | A toggleable status overlay (window menu, Ctrl+Alt+Shift+F12, off by default) that redraws with presents the viewer already makes, plus a 1 s tick only while its figures change; CPU-blended on the direct path, one blended draw on the letterbox path (shader and tick approved by the human, 2026-10-31) |
 | [0045](0045-gitlab-ci-windows-x64-window-free-tests.md) | GitLab CI: prepared Windows x64 runner, sequential window-free tests and portable package artifacts |
 | [0046](0046-msvc-native-codecs.md) | MSVC may build the native codec DLLs alongside MinGW Clang (human, 2026-11-01) |
-| [0047](0047-github-actions-release-artifacts.md) | GitHub Actions: hosted Windows x64/ARM64 MSVC builds, sequential x64 tests and portable release artifacts |
+| [0047](0047-github-actions-release-artifacts.md) | GitHub Actions: hosted Windows x64/ARM64 Clang codecs, sequential x64 tests and portable release artifacts |
 | [0048](0048-msvc-quic-inlining-and-vs-solution.md) | MSVC x64 QUIC uses measured /Ob3 inlining; VS 2026 solution builds native codecs for x64/ARM64 |

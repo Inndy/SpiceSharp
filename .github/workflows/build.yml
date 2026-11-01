@@ -47,10 +47,19 @@ jobs:
           path-type: inherit
           install: make diffutils curl tar xz mingw-w64-ucrt-x86_64-nasm
 
-      - name: Set up MSVC target environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
-        with:
-          arch: ${{ matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+      - name: Set up pinned Clang cross-toolchain
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = '20261020'
+          $name = "llvm-mingw-$release-ucrt-x86_64"
+          $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$release/$name.zip" -OutFile $zip
+          $expected = 'fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74cd'
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() -cne $expected) {
+            throw 'llvm-mingw toolchain checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $zip -DestinationPath $env:RUNNER_TEMP
+          "LLVM_MINGW_BIN=$env:RUNNER_TEMP/$name/bin" >> $env:GITHUB_ENV
 
       - name: Build native codecs
         env:
@@ -58,18 +67,23 @@ jobs:
           TARGET_ARCH: ${{ matrix.arch }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:PATH = "${env:ProgramFiles}/LLVM/bin;$env:MSYS2_ROOT/ucrt64/bin;$env:PATH"
-          # No login shell: retain the MSVC developer environment and tool paths.
-          & "$env:MSYS2_ROOT/usr/bin/bash.exe" native/build-msvc.sh $env:TARGET_ARCH
+          $env:PATH = "$env:LLVM_MINGW_BIN;$env:MSYS2_ROOT/ucrt64/bin;$env:MSYS2_ROOT/usr/bin;$env:PATH"
+          & "$env:MSYS2_ROOT/usr/bin/bash.exe" native/build.sh $env:TARGET_ARCH
           if ($LASTEXITCODE -ne 0) { throw 'Native codec build failed' }
 
       - name: Verify native ABI and hardening
         env:
           TARGET_ARCH: ${{ matrix.arch }}
         run: |
-          $env:PATH = "${env:ProgramFiles}/LLVM/bin;$env:PATH"
+          $env:PATH = "$env:LLVM_MINGW_BIN;$env:PATH"
           python native/verify.py $env:TARGET_ARCH
           if ($LASTEXITCODE -ne 0) { throw 'Native verification failed' }
+
+      # Native codecs use Clang. Native AOT still needs the MSVC linker/Windows SDK.
+      - name: Set up Native AOT linker environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: ${{ matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
 
       - name: Build solution and run window-free tests
         if: matrix.arch == 'x64'
@@ -80,8 +94,12 @@ jobs:
             'Spice.Native.Tests', 'Spice.Wire.Tests', 'Spice.Replay.Tests',
             'Spice.Video.Tests', 'Spice.Diagnostics.Tests', 'Pve.Api.Tests', 'Pve.Term.Tests'
           )
+          New-Item -ItemType Directory -Force TestResults | Out-Null
+          '<RunSettings><xUnit><ParallelizeTestCollections>false</ParallelizeTestCollections><MaxParallelThreads>1</MaxParallelThreads></xUnit></RunSettings>' | Set-Content TestResults/serial.runsettings
           foreach ($project in $projects) {
-            dotnet test "tests/$project/$project.csproj" -c Release --no-build --no-restore --logger "trx;LogFileName=$project.trx" --results-directory TestResults
+            $testArgs = @('test', "tests/$project/$project.csproj", '-c', 'Release', '--no-build', '--no-restore', '--logger', "trx;LogFileName=$project.trx", '--results-directory', 'TestResults')
+            if ($project -like 'Spice.*') { $testArgs += @('--settings', 'TestResults/serial.runsettings') }
+            dotnet @testArgs
             if ($LASTEXITCODE -ne 0) { throw "Tests failed: $project" }
           }
 
@@ -111,7 +129,7 @@ jobs:
             foreach ($required in @(
               'SpiceViewer.exe', 'PveTerm.exe', 'PveLauncher/PveLauncher.exe',
               'spicecodec.dll', 'turbojpeg.dll', 'opus.dll', 'README.txt', 'LICENSE.txt',
-              'source/native/build-msvc.sh', 'source/native/fetch.sh'
+              'source/native/build.sh', 'source/native/build-msvc.sh', 'source/native/fetch.sh'
             )) {
               if ($entries -cnotcontains $required) { throw "Release archive is missing $required" }
             }

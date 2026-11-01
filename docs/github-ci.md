@@ -8,18 +8,24 @@ private runner setup are required. The existing [GitLab pipeline](ci.md) is inde
 ## Build and validation
 
 Two disposable `windows-2025` x64 runners build `win-x64` and `win-arm64` independently. Each sets up the SDK
-from `global.json`, MSYS2 utilities and a matching MSVC developer environment. The hosted image supplies CMake,
-Ninja, LLVM, Python and the Windows SDK. MSYS2 NASM supplies x64 assembly. A non-login MSYS2 bash retains the
-developer environment required by `native/build-msvc.sh`. Native source downloads are hash-checked by `fetch.sh`.
-Actions are pinned to commit hashes; hosted image and utility package versions can change between runs.
+from `global.json`, MSYS2 utilities and the pinned llvm-mingw 20261020 UCRT x64-hosted cross-toolchain
+([official release](https://github.com/mstorsjo/llvm-mingw/releases/tag/20261020)). Its Windows ZIP is checked
+against SHA-256 `fd5462b7f5d93b2ff981fcd3f9c7e427e47f3203c64ea91c27bcc444eebd74cd` before extraction.
+The hosted image supplies CMake, Ninja, Python, MSVC and the Windows SDK. MSYS2 supplies NASM and POSIX tools.
+Native source downloads are hash-checked by `fetch.sh`. Actions are pinned to commit hashes; hosted image and
+utility package versions can change between runs.
 
-Both jobs build codecs using the existing MSVC script, verify their architecture, exports, imports and PE
+Both jobs build codecs using the default Clang script (`native/build.sh`), verify their architecture, exports, imports and PE
 protections, then run `tools/package.ps1` for the matching RID. The x64 job also runs the native smoke test
 (inside the native build script), builds the full solution and executes all seven window-free test projects
 sequentially before packaging. Any failed build, verification, test or publish stops that job's package upload.
 Before upload, each job checks the zip's SHA-256 sidecar, required executables, DLLs, notices and native build
 scripts, and rejects runtime data, connection files and debug symbols in the archive. TRX reports upload even
 after a test failure. ARM64 is cross-built, not executed or tested on ARM hardware.
+
+Clang remains the default native compiler locally and in both CI systems. The slower MSVC codec path is
+optional (including the explicit x64/ARM64 VS solution builds). GitHub CI sets up MSVC only after the Clang
+codec build, for the linker required by .NET Native AOT; it does not rebuild codec DLLs with MSVC.
 
 The workflow never runs `Spice.Viewer.Tests`, opens application windows, contacts a guest, accesses Proxmox
 credentials, signs executables or publishes a GitHub Release. Hardware-dependent tests may skip on hosted

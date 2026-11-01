@@ -98,6 +98,9 @@ GitHub Actions builds portable Native AOT packages for Windows x64 and ARM64. Do
 file from a successful **Windows release build** run's artifacts. See [GitHub CI](docs/github-ci.md) for triggers,
 validation coverage and release promotion. These packages include the viewer, launcher and terminal bridge.
 
+**Clang remains the default native codec compiler**, including GitHub and GitLab CI. MSVC codec builds are optional;
+the MSVC linker is still required to publish .NET Native AOT executables on Windows.
+
 Use the .NET 10 SDK selected by `global.json`. Windows Native AOT publishing also requires Visual Studio Build
 Tools with C++ tools and the Windows SDK, plus PowerShell 7. The current codec build uses MSYS2 CLANG64 with
 Clang/LLD, CMake, Ninja, NASM, GNU make and fetch utilities. See [native/README.md](native/README.md) for the

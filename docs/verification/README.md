@@ -6,6 +6,7 @@ are not repeated here; link them instead.
 
 | Record | Covers |
 |---|---|
+| [2026-11-01-clang-ci-integration.md](2026-11-01-clang-ci-integration.md) | Combined branch: default Clang native smoke/PE checks, full solution and 1,292 tests, complete x64 AOT package and workflow archive validation |
 | [2026-11-01-msvc-speed-vs-solution.md](2026-11-01-msvc-speed-vs-solution.md) | MSVC flag measurements, VS 2026 x64/ARM64 solution builds, fresh DLL copying, PE/ABI and differential checks; no live guest |
 | [2026-11-01-msvc-codec.md](2026-11-01-msvc-codec.md) | Automated MSVC x64/ARM64 builds, exact DLL ABI and PE protections, codec differential and managed tests, and package notices; no live guest |
 | [2026-10-29-live.md](2026-10-29-live.md) | M3 presentation (ETW present modes), M5 agent (clipboard, resize, mouse modes), M7 audio and MJPEG, settings and install round trip, allocation profiling |
