@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -82,7 +83,11 @@ public partial class HandoffTests
         var aces = Regex.Matches(dacl.Groups[2].Value, @"\(([^)]*)\)").Select(m => m.Groups[1].Value).ToArray();
         Assert.Single(aces);
         Assert.StartsWith("A;;FA;;;", aces[0]);
-        Assert.EndsWith(user, aces[0]);
+        // Windows abbreviates the local administrator SID as LA in SDDL.
+        // Compare the decoded SID, keeping the exact-one-ACE/access checks above.
+        var descriptor = new RawSecurityDescriptor(sddl);
+        var ace = Assert.IsType<CommonAce>(descriptor.DiscretionaryAcl![0]);
+        Assert.Equal(new SecurityIdentifier(user), ace.SecurityIdentifier);
         // Mandatory label: no read up and no write up from lower integrity levels.
         Assert.Matches(@"S:.*\(ML;;NWNR;;;[A-Z0-9-]+\)", sddl);
     }
