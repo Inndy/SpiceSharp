@@ -56,6 +56,34 @@ verify.py allows it for spicecodec.dll only). The decoder is otherwise unmodifie
 
 ## Building with MSVC on Windows
 
+Visual Studio 2026 can build the managed solution and native DLLs together. Install
+**Desktop development with C++** (v145 and the Windows SDK), .NET 10, and the MSYS2
+tools listed above. Set `SPICE_MSYS2_ROOT` to the MSYS2 installation root (the
+Scoop `msys2/current` installation is detected by default). Open `SpiceViewer.sln`,
+select **x64** or **ARM64**, and build. From a VS 2026 developer command prompt:
+
+```bat
+MSBuild.exe SpiceViewer.sln /restore /m /p:Configuration=Release /p:Platform=x64
+```
+
+`native/Spice.Native.Codecs.vcxproj` delegates to `build-msvc.ps1`, which selects
+the VS 2026 x64-hosted compiler and invokes the existing pinned-source build.
+Both Debug and Release solution configurations use optimized native DLLs, matching
+the existing codec workflow. Rebuild and Clean affect only the selected MSVC
+architecture's build products; downloads and the other architecture are retained.
+ARM64 needs the VS ARM64 C++ tools and MSYS2 Clang for FFmpeg assembly.
+
+MSVC x64 QUIC additionally uses `/Ob3`: local measurements reduced QUIC fixture
+decode time by about 3.5%, at a 4 KB DLL cost. Other codecs and ARM64 keep their existing
+flags. MSVC still trails MinGW on QUIC/LZ; see [decision 0048](../docs/decisions/0048-msvc-quic-inlining-and-vs-solution.md)
+for the measured trade-offs and rejected flag combinations.
+
+**Any CPU** remains the managed-only configuration for `dotnet build
+SpiceViewer.sln`; build the native DLLs separately first. `dotnet`'s MSBuild lacks
+the Visual C++ targets; use VS 2026 `MSBuild.exe` for the complete x64/ARM64 build.
+The native project is a solution dependency of each native-DLL consumer so DLLs
+exist before they are collected for copying, including on the first build.
+
 MSVC is an alternative to MinGW (decision [0046](../docs/decisions/0046-msvc-native-codecs.md)).
 Open a Visual Studio **x64 Native Tools Command Prompt**, put CMake 3.24+, Ninja and
 NASM on PATH, then launch MSYS2's `usr/bin/bash.exe` without `--login` (to inherit the

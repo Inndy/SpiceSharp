@@ -1,16 +1,28 @@
 <Project>
   <PropertyGroup>
     <SpiceNativeArch Condition="'$(SpiceNativeArch)' == '' and '$(RuntimeIdentifier)' == 'win-arm64'">arm64</SpiceNativeArch>
+    <SpiceNativeArch Condition="'$(SpiceNativeArch)' == '' and '$(Platform)' == 'ARM64'">arm64</SpiceNativeArch>
     <SpiceNativeArch Condition="'$(SpiceNativeArch)' == ''">x64</SpiceNativeArch>
     <SpiceNativeDirectory>$(MSBuildThisFileDirectory)out/win-$(SpiceNativeArch)/</SpiceNativeDirectory>
   </PropertyGroup>
   <ItemGroup>
-    <Content Include="$(SpiceNativeDirectory)FFmpeg-build.txt" Condition="Exists('$(SpiceNativeDirectory)FFmpeg-build.txt')" Link="FFmpeg-build.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <_SpiceNativeDll Include="$(SpiceNativeDirectory)spicecodec.dll;$(SpiceNativeDirectory)turbojpeg.dll;$(SpiceNativeDirectory)opus.dll" />
-    <Content Include="$(SpiceNativeDirectory)spicecodec.dll" Condition="Exists('$(SpiceNativeDirectory)spicecodec.dll')" Link="spicecodec.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="$(SpiceNativeDirectory)turbojpeg.dll" Condition="Exists('$(SpiceNativeDirectory)turbojpeg.dll')" Link="turbojpeg.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="$(SpiceNativeDirectory)opus.dll" Condition="Exists('$(SpiceNativeDirectory)opus.dll')" Link="opus.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- A solution-only dependency does not order a transitive project build
+         (for example Viewer.Tests -> SpiceViewer). Carry the edge in the project graph. -->
+    <ProjectReference Include="$(MSBuildThisFileDirectory)Spice.Native.Codecs.vcxproj"
+                      Condition="'$(MSBuildRuntimeType)' != 'Core' and ('$(Platform)' == 'x64' or '$(Platform)' == 'ARM64')"
+                      ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true"
+                      GlobalPropertiesToRemove="TargetFramework;RuntimeIdentifier;SelfContained" />
   </ItemGroup>
+  <!-- Solution dependencies build native codecs after project evaluation on a clean checkout. -->
+  <Target Name="CollectSpiceNativeContent" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <Content Include="$(SpiceNativeDirectory)FFmpeg-build.txt" Condition="Exists('$(SpiceNativeDirectory)FFmpeg-build.txt')" Link="FFmpeg-build.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(SpiceNativeDirectory)spicecodec.dll" Condition="Exists('$(SpiceNativeDirectory)spicecodec.dll')" Link="spicecodec.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(SpiceNativeDirectory)turbojpeg.dll" Condition="Exists('$(SpiceNativeDirectory)turbojpeg.dll')" Link="turbojpeg.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(SpiceNativeDirectory)opus.dll" Condition="Exists('$(SpiceNativeDirectory)opus.dll')" Link="opus.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
   <Target Name="WarnMissingSpiceNativeDlls" BeforeTargets="PrepareForBuild">
     <Warning Condition="!Exists('%(_SpiceNativeDll.Identity)')" Text="Native codec %(_SpiceNativeDll.Identity) is missing. Run bash native/build.sh $(SpiceNativeArch)." />
   </Target>

@@ -91,7 +91,7 @@ public partial class PveTermReviewTests
             exec(compile(ast.Module(body=[node], type_ignores=[]), '<pve-vv term_main>', 'exec'))
             sys.exit(term_main(['node:testnode', '--here']))
             """;
-        string helper = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../tools/pve-vv.py"));
+        string helper = Path.Combine(RepositoryPaths.Root, "tools", "pve-vv.py");
         var start = new ProcessStartInfo("python")
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -359,7 +359,7 @@ public partial class PveTermReviewTests
                 sys.exit(0)
             sys.exit(1)
             """;
-        string helper = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../tools/pve-vv.py"));
+        string helper = Path.Combine(RepositoryPaths.Root, "tools", "pve-vv.py");
         var start = new ProcessStartInfo("python")
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -394,7 +394,7 @@ public partial class PveTermReviewTests
             exec(compile(ast.Module(body=[node], type_ignores=[]), '<pve-vv term_main>', 'exec'))
             sys.exit(term_main(['node:testnode', '--here']))
             """;
-        string helper = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../tools/pve-vv.py"));
+        string helper = Path.Combine(RepositoryPaths.Root, "tools", "pve-vv.py");
         var start = new ProcessStartInfo("python")
         {
             UseShellExecute = false, CreateNoWindow = true,

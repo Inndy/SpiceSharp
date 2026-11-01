@@ -63,7 +63,7 @@ public sealed class LauncherAnswersTlsReviewTests
                 RedirectStandardOutput = true, RedirectStandardError = true,
             };
             foreach (var arg in new[] { "-I", "-B", "-c", script,
-                Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../")), pem, historical.ToString() })
+                RepositoryPaths.Root, pem, historical.ToString() })
                 psi.ArgumentList.Add(arg);
             using var p = Process.Start(psi)!;
             var stdout = p.StandardOutput.ReadToEndAsync();

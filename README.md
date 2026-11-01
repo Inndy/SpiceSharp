@@ -103,6 +103,13 @@ Tools with C++ tools and the Windows SDK, plus PowerShell 7. The current codec b
 Clang/LLD, CMake, Ninja, NASM, GNU make and fetch utilities. See [native/README.md](native/README.md) for the
 complete toolchain and Linux cross-build instructions. Dependencies are pinned by version or source archive hash.
 
+Visual Studio 2026 can also build the entire solution, including MSVC codec DLLs:
+install the C++ v145 tools and MSYS2 dependencies, set `SPICE_MSYS2_ROOT` to the
+MSYS2 root, and select **x64** or **ARM64** in `SpiceViewer.sln`. From its developer
+prompt, run `MSBuild.exe SpiceViewer.sln /restore /m /p:Configuration=Release /p:Platform=x64`.
+See the [MSVC build guide](native/README.md#building-with-msvc-on-windows).
+**Any CPU** builds only managed projects and uses separately built native DLLs.
+
 Build the codec DLLs from the repository root in an MSYS2 CLANG64 shell:
 
 ```sh

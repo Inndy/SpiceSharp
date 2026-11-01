@@ -52,6 +52,11 @@ else()
 endif()
 
 add_library(spicecodec SHARED spicecodec/codec_bridge.c spicecodec/vendor/common/quic.c spicecodec/vendor/common/lz.c spicecodec/vendor/common/mem.c spicecodec/vendor/decode-glz.c ${SC_LZ4_DIR}/lz4.c)
+if(MSVC AND MSVC_C_ARCHITECTURE_ID STREQUAL "x64")
+  # More aggressive inlining measurably speeds up QUIC. Keep the other codecs'
+  # inlining budget unchanged: whole-target /Ob3 regressed some LZ/GLZ workloads.
+  set_property(SOURCE spicecodec/vendor/common/quic.c APPEND PROPERTY COMPILE_OPTIONS /Ob3)
+endif()
 target_include_directories(spicecodec PRIVATE spicecodec/include spicecodec/shim spicecodec/vendor spicecodec/vendor/common ${SC_LZ4_DIR})
 if(MSVC)
   # gnulib verify.h deliberately declares an anonymous struct inside sizeof.

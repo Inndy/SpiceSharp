@@ -56,3 +56,4 @@ When a decision changes, write a new record and set the old one's status to `Sup
 | [0045](0045-gitlab-ci-windows-x64-window-free-tests.md) | GitLab CI: prepared Windows x64 runner, sequential window-free tests and portable package artifacts |
 | [0046](0046-msvc-native-codecs.md) | MSVC may build the native codec DLLs alongside MinGW Clang (human, 2026-11-01) |
 | [0047](0047-github-actions-release-artifacts.md) | GitHub Actions: hosted Windows x64/ARM64 MSVC builds, sequential x64 tests and portable release artifacts |
+| [0048](0048-msvc-quic-inlining-and-vs-solution.md) | MSVC x64 QUIC uses measured /Ob3 inlining; VS 2026 solution builds native codecs for x64/ARM64 |

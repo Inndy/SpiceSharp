@@ -15,6 +15,15 @@ fi
 for tool in cl.exe link.exe lib.exe cmake ninja make nasm; do command -v "$tool" >/dev/null; done
 root=$(cygpath -m "$PWD")
 b="build/msvc-$1"; out="out/win-$1"
+if [[ ${2:-} == --clean ]]; then
+  for component in spice jpeg opus; do
+    if [[ -f $b/$component/build.ninja ]]; then cmake --build "$b/$component" --target clean; fi
+  done
+  if [[ -f $b/ffmpeg/ffbuild/config.mak ]]; then make -C "$b/ffmpeg" clean; fi
+  # Leave downloads and the other architecture intact; prevent stale DLL copying.
+  for f in spicecodec.dll turbojpeg.dll opus.dll codec-smoke.exe FFmpeg-build.txt; do rm -f "$out/$f"; done
+  exit 0
+fi
 bash fetch.sh
 # /MT avoids a VC redistributable dependency. All LGPL objects stay in spicecodec.dll.
 release='/O2 /DNDEBUG /GL /Gy /Gw /guard:cf /utf-8'

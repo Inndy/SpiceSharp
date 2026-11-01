@@ -85,7 +85,7 @@ public class VncToolsReviewTests
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true,
         };
-        foreach (var arg in new[] { "-I", "-B", "-c", script, Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../")) })
+        foreach (var arg in new[] { "-I", "-B", "-c", script, RepositoryPaths.Root })
             psi.ArgumentList.Add(arg);
         using var process = Process.Start(psi)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
